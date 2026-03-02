@@ -1,0 +1,20 @@
+<Window x:Class="Planner.App.Views.ReminderPopupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Напоминание"
+        Width="380" Height="Auto" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Topmost="True"
+        Background="{StaticResource BackgroundCardBrush}">
+    <Border Padding="24" BorderBrush="{StaticResource PrimaryBrush}" BorderThickness="0,0,0,3">
+        <StackPanel>
+            <TextBlock x:Name="TitleText" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <TextBlock x:Name="TimeText" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="OkButton" Content="Выполнено" Click="OkButton_OnClick" Style="{StaticResource PrimaryButton}" Margin="0,0,12,0" MinWidth="120"/>
+                <Button Content="Позже" IsCancel="True" Style="{StaticResource NavButton}" MinWidth="100"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

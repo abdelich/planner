@@ -1,0 +1,27 @@
+<Application x:Class="Planner.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Planner.App"
+             xmlns:conv="clr-namespace:Planner.App.Converters"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Styles/Colors.xaml"/>
+                <ResourceDictionary Source="Styles/Controls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+            <conv:InvertBooleanToVisibilityConverter x:Key="BoolToVisInverse"/>
+            <conv:StringToVisibilityConverter x:Key="StringToVisibilityConverter"/>
+            <conv:GoalTypeToRussianConverter x:Key="GoalTypeToRu"/>
+            <conv:RecurrenceKindToRussianConverter x:Key="RecurrenceKindToRu"/>
+            <conv:GoalCategoryToRussianConverter x:Key="GoalCategoryToRu"/>
+            <conv:GoalCategoryToVisibilityConverter x:Key="GoalCategoryToVisibilityConverter"/>
+            <conv:RecurringCategoryToVisibilityConverter x:Key="RecurringCategoryToVisibilityConverter"/>
+            <conv:EveryNDaysToVisibilityConverter x:Key="EveryNDaysToVisibilityConverter"/>
+            <conv:SpecificDaysToVisibilityConverter x:Key="SpecificDaysToVisibilityConverter"/>
+            <conv:TabIndexToVisibilityConverter x:Key="TabIndexToVisibilityConverter"/>
+            <conv:TransactionTypeToRussianConverter x:Key="TransactionTypeToRu"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

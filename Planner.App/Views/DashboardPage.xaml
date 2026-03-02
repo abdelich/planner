@@ -1,0 +1,106 @@
+<UserControl x:Class="Planner.App.Views.DashboardPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Planner.App.ViewModels"
+             Background="{StaticResource BackgroundDarkBrush}">
+    <UserControl.Resources>
+        <vm:DashboardViewModel x:Key="Vm"/>
+    </UserControl.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="24">
+        <StackPanel DataContext="{StaticResource Vm}">
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Статистика и дашборд" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" Content="Обновить" Command="{Binding LoadAsyncCommand}" Style="{StaticResource NavButton}" Padding="12,8"/>
+            </Grid>
+
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="Цели сегодня" Foreground="{StaticResource TextSecondaryBrush}" FontSize="13" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding GoalsCompletedToday}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource CardBorder}" Margin="4,0">
+                    <StackPanel>
+                        <TextBlock Text="Цели за неделю" Foreground="{StaticResource TextSecondaryBrush}" FontSize="13" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding GoalsCompletedThisWeek}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource PrimaryBrush}"/>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource CardBorder}" Margin="4,0">
+                    <StackPanel>
+                        <TextBlock Text="Цели за месяц" Foreground="{StaticResource TextSecondaryBrush}" FontSize="13" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding GoalsCompletedThisMonth}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource PrimaryLightBrush}"/>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="3" Style="{StaticResource CardBorder}" Margin="8,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Напоминания за месяц" Foreground="{StaticResource TextSecondaryBrush}" FontSize="13" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding RemindersCompletedThisMonth}" FontSize="28" FontWeight="Bold" Foreground="{StaticResource SuccessBrush}"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Style="{StaticResource CardBorder}">
+                <StackPanel>
+                    <TextBlock Text="Активность по целям (последние 14 дней)" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,12"/>
+                    <ItemsControl ItemsSource="{Binding LastDaysActivity}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding DateText}" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                                    <ProgressBar Grid.Column="1" Value="{Binding Percent, Mode=OneWay}" Maximum="100" Style="{StaticResource ProgressBarStyle}" Height="20" Margin="8,0" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Count}" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" MinWidth="24"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- Напоминания за месяц: сводка -->
+            <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="{Binding RemindersMonthSummary}" FontSize="14" Foreground="{StaticResource TextSecondaryBrush}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardBorder}">
+                <StackPanel>
+                    <TextBlock Text="Напоминания по выполнению за месяц" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,12"/>
+                    <ItemsControl ItemsSource="{Binding ReminderStats}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,0,0,12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Title}" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Summary}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </Grid>
+                                    <ProgressBar Value="{Binding Percent, Mode=OneWay}" Maximum="100" Style="{StaticResource ProgressBarStyle}" Height="8" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

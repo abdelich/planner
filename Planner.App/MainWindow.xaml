@@ -1,0 +1,40 @@
+<Window x:Class="Planner.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:Planner.App.ViewModels"
+        mc:Ignorable="d"
+        Title="Planner — Цели и напоминания"
+        Icon="app.ico"
+        Height="700" Width="1071"
+        MinHeight="500" MinWidth="800"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BackgroundDarkBrush}">
+    <Window.DataContext>
+        <vm:MainViewModel/>
+    </Window.DataContext>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="{StaticResource BackgroundCardBrush}" BorderBrush="#e0e0e0" BorderThickness="0,0,1,0">
+            <StackPanel Margin="16,24">
+                <TextBlock Text="Planner" FontSize="20" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" Margin="0,0,0,24"/>
+                <Button Content="🎯 Цели" Command="{Binding NavigateCommand}" CommandParameter="Goals"
+                        Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
+                <Button Content="⏰ Напоминания" Command="{Binding NavigateCommand}" CommandParameter="Reminders"
+                        Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
+                <Button Content="📊 Статистика" Command="{Binding NavigateCommand}" CommandParameter="Dashboard"
+                        Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
+                <Button Content="💰 Финансы" Command="{Binding NavigateCommand}" CommandParameter="Finance"
+                        Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
+                <CheckBox IsChecked="{Binding RunAtStartup}" Content="Запуск с Windows" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,16,0,0" Style="{StaticResource CheckBoxStyle}"/>
+            </StackPanel>
+        </Border>
+
+        <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" Margin="0"/>
+    </Grid>
+</Window>
