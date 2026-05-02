@@ -14,10 +14,12 @@ public partial class GoalsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(DisplayPeriodText))]
     [NotifyPropertyChangedFor(nameof(ShowPeriodTypeAsLabel))]
     [NotifyPropertyChangedFor(nameof(ShowPeriodTypeComboBox))]
+    [NotifyPropertyChangedFor(nameof(ShowPeriodNotes))]
     private int _selectedTabIndex;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DisplayPeriodText))]
+    [NotifyPropertyChangedFor(nameof(PeriodNoteTitle))]
     private int _selectedPeriodSubTabIndex;
 
     [ObservableProperty]
@@ -29,6 +31,18 @@ public partial class GoalsViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<GoalItemViewModel> _monthGoals = new();
     [ObservableProperty] private ObservableCollection<GoalItemViewModel> _recurringGoals = new();
     [ObservableProperty] private ObservableCollection<GoalItemViewModel> _todayDue = new();
+
+    [ObservableProperty] private string _periodNoteText = "";
+
+    public bool ShowPeriodNotes => SelectedTabIndex == 0;
+
+    public string PeriodNoteTitle => SelectedPeriodSubTabIndex switch
+    {
+        0 => "Заметка за этот день",
+        1 => "Заметка за эту неделю",
+        2 => "Заметка за этот месяц",
+        _ => "Заметка за этот день"
+    };
 
     private static readonly System.Globalization.CultureInfo Ru = System.Globalization.CultureInfo.GetCultureInfo("ru-RU");
 
@@ -88,6 +102,7 @@ public partial class GoalsViewModel : ObservableObject
         await LoadPeriodGoalsAsync();
         await LoadRecurringGoalsAsync();
         await LoadTodayDueAsync();
+        await LoadPeriodNoteAsync();
     }
 
     private async Task LoadPeriodGoalsAsync()
@@ -108,6 +123,8 @@ public partial class GoalsViewModel : ObservableObject
         {
             if (g.Type == GoalType.Daily)
             {
+                if (!MatchesDailyPeriod(g, dayDate))
+                    continue;
                 var (current, target, label) = await GetPeriodProgressForDateAsync(g, dayDate, dayDate);
                 var periodEnd = dayDate;
                 var isPast = periodEnd < today;
@@ -121,6 +138,8 @@ public partial class GoalsViewModel : ObservableObject
             }
             else if (g.Type == GoalType.Weekly)
             {
+                if (!MatchesWeeklyPeriod(g, weekStart))
+                    continue;
                 var (current, target, label) = await GetPeriodProgressForDateAsync(g, weekStart, weekEnd);
                 var isPast = weekEnd < today;
                 var periodDate = today >= weekStart && today <= weekEnd ? today : weekStart;
@@ -133,6 +152,8 @@ public partial class GoalsViewModel : ObservableObject
             }
             else if (g.Type == GoalType.Monthly)
             {
+                if (!MatchesMonthlyPeriod(g, monthStart))
+                    continue;
                 var (current, target, label) = await GetPeriodProgressForDateAsync(g, monthStart, monthEnd);
                 var isPast = monthEnd < today;
                 var periodDate = today >= monthStart && today <= monthEnd ? today : monthStart;
@@ -200,7 +221,7 @@ public partial class GoalsViewModel : ObservableObject
         var today = DateTime.Today;
         var items = new List<GoalItemViewModel>();
         var periodList = await _service.GetPeriodGoalsAsync();
-        foreach (var g in periodList.Where(g => g.Type == GoalType.Daily))
+        foreach (var g in periodList.Where(g => g.Type == GoalType.Daily && MatchesDailyPeriod(g, today)))
         {
             var completed = await _service.IsGoalCompletedForDateAsync(g.Id, today);
             var progress = await GetPeriodProgressAsync(g);
@@ -301,9 +322,49 @@ public partial class GoalsViewModel : ObservableObject
     }
     private static DateTime GetWeekEnd(DateTime d) => GetWeekStart(d).AddDays(6);
 
+    private static DateTime PeriodAnchor(Goal g) => (g.StartDate ?? g.CreatedAt).Date;
+
+    private static bool MatchesDailyPeriod(Goal g, DateTime dayDate) =>
+        g.Category == GoalCategory.Period && g.Type == GoalType.Daily && PeriodAnchor(g) == dayDate.Date;
+
+    private static bool MatchesWeeklyPeriod(Goal g, DateTime weekStart) =>
+        g.Category == GoalCategory.Period && g.Type == GoalType.Weekly &&
+        GetWeekStart(PeriodAnchor(g)) == weekStart.Date;
+
+    private static bool MatchesMonthlyPeriod(Goal g, DateTime monthStart) =>
+        g.Category == GoalCategory.Period && g.Type == GoalType.Monthly &&
+        PeriodAnchor(g).Year == monthStart.Year && PeriodAnchor(g).Month == monthStart.Month;
+
+    private (NotePeriodKind kind, DateTime periodStart) GetCurrentNotePeriod() =>
+        SelectedPeriodSubTabIndex switch
+        {
+            0 => (NotePeriodKind.Day, SelectedPeriodDate.Date),
+            1 => (NotePeriodKind.Week, GetWeekStart(SelectedPeriodDate)),
+            2 => (NotePeriodKind.Month, new DateTime(SelectedPeriodDate.Year, SelectedPeriodDate.Month, 1)),
+            _ => (NotePeriodKind.Day, SelectedPeriodDate.Date)
+        };
+
+    private async Task LoadPeriodNoteAsync()
+    {
+        if (SelectedTabIndex != 0)
+        {
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => PeriodNoteText = "");
+            return;
+        }
+        var (kind, start) = GetCurrentNotePeriod();
+        var text = await _service.GetPeriodNoteTextAsync(kind, start) ?? "";
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => PeriodNoteText = text);
+    }
+
+    private async Task ReloadPeriodTabAsync()
+    {
+        await LoadPeriodGoalsAsync();
+        await LoadPeriodNoteAsync();
+    }
+
     partial void OnSelectedTabIndexChanged(int value) => _ = LoadAsync();
-    partial void OnSelectedPeriodSubTabIndexChanged(int value) => _ = LoadPeriodGoalsAsync();
-    partial void OnSelectedPeriodDateChanged(DateTime value) => _ = LoadPeriodGoalsAsync();
+    partial void OnSelectedPeriodSubTabIndexChanged(int value) => _ = ReloadPeriodTabAsync();
+    partial void OnSelectedPeriodDateChanged(DateTime value) => _ = ReloadPeriodTabAsync();
 
     [RelayCommand]
     private async Task ToggleTodayComplete(GoalItemViewModel item)
@@ -357,6 +418,14 @@ public partial class GoalsViewModel : ObservableObject
     private void CloseAddPanel() => IsAddPanelOpen = false;
 
     [RelayCommand]
+    private async Task SavePeriodNote()
+    {
+        if (SelectedTabIndex != 0) return;
+        var (kind, start) = GetCurrentNotePeriod();
+        await _service.SavePeriodNoteAsync(kind, start, PeriodNoteText ?? "");
+    }
+
+    [RelayCommand]
     private async Task SaveNewGoal()
     {
         if (string.IsNullOrWhiteSpace(NewGoalTitle?.Trim()))
@@ -402,6 +471,18 @@ public partial class GoalsViewModel : ObservableObject
                 return;
         }
 
+        DateTime? periodStart = null;
+        if (NewGoalCategory == GoalCategory.Period)
+        {
+            periodStart = NewGoalType switch
+            {
+                GoalType.Daily => SelectedPeriodDate.Date,
+                GoalType.Weekly => GetWeekStart(SelectedPeriodDate),
+                GoalType.Monthly => new DateTime(SelectedPeriodDate.Year, SelectedPeriodDate.Month, 1),
+                _ => SelectedPeriodDate.Date
+            };
+        }
+
         var goal = new Goal
         {
             Category = NewGoalCategory,
@@ -411,7 +492,8 @@ public partial class GoalsViewModel : ObservableObject
             RecurrenceKind = NewGoalRecurrenceKind,
             IntervalDays = intervalDays,
             RecurrenceDays = recurrenceDays,
-            TargetCount = targetCount
+            TargetCount = targetCount,
+            StartDate = periodStart
         };
         try
         {

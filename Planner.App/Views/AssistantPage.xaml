@@ -1,0 +1,135 @@
+<UserControl x:Class="Planner.App.Views.AssistantPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource BackgroundDarkBrush}">
+    <Grid Margin="24">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock Text="AI Ассистент" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+            <Button Content="Создай цель" Command="{Binding InsertQuickCommandCommand}" CommandParameter="создай цель: " Style="{StaticResource NavButton}" Margin="16,0,8,0"/>
+            <Button Content="Отчет за неделю" Command="{Binding InsertQuickCommandCommand}" CommandParameter="Сформируй отчет за неделю" Style="{StaticResource NavButton}"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,12,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <ListBox Grid.Row="0" ItemsSource="{Binding Messages}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingStackPanel.IsVirtualizing="True"
+                         VirtualizingStackPanel.VirtualizationMode="Recycling"
+                         HorizontalContentAlignment="Stretch">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource BackgroundHoverBrush}" CornerRadius="8" Padding="10" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding RoleText}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12"/>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="200">
+                                        <TextBlock Text="{Binding Message.Content}" TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4,0,0"/>
+                                    </ScrollViewer>
+                                    <TextBlock Text="{Binding CreatedText}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" Margin="0,6,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock Grid.Row="1" Text="{Binding StatusText}" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,0"/>
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Настройки LLM" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                        <TextBlock Text="API Key (OpenAI)" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding KeyHint}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <TextBox Text="{Binding ApiKey, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"/>
+                        <TextBlock Text="Model" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"/>
+                        <TextBlock Text="Endpoint" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"/>
+                        <CheckBox Content="Разрешить данные финансов" IsChecked="{Binding AllowFinanceData}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Разрешить данные целей" IsChecked="{Binding AllowGoalsData}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Разрешить данные напоминаний" IsChecked="{Binding AllowRemindersData}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,8"/>
+                        <Button Content="Сохранить настройки" Command="{Binding SaveSettingsCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Поручения" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                        <ItemsControl ItemsSource="{Binding Tasks}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,8">
+                                        <TextBlock Text="{Binding Task.Kind}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                        <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextSecondaryBrush}"/>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="100">
+                                            <TextBlock Text="{Binding Task.ResultText}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                        </ScrollViewer>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Отчеты" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                        <ItemsControl ItemsSource="{Binding Reports}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock>
+                                            <Run Text="{Binding KindText, Mode=OneWay}"/>
+                                            <Run Text=" — "/>
+                                            <Run Text="{Binding DateText, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="150">
+                                            <TextBlock Text="{Binding Report.Body}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+                                        </ScrollViewer>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource CardBorder}" Margin="0,12,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding DraftMessage, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" Margin="0,0,8,0"/>
+                <Button Grid.Column="1" Content="Отправить" Command="{Binding SendMessageCommand}" Style="{StaticResource PrimaryButton}"/>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

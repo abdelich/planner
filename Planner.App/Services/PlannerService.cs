@@ -4,7 +4,7 @@ using Planner.App.Models;
 
 namespace Planner.App.Services;
 
-public class PlannerService
+public class PlannerService : IDisposable
 {
     private readonly PlannerDbContext _db = new();
 
@@ -364,14 +364,15 @@ public class PlannerService
         await _db.SaveChangesAsync();
     }
 
-    public async Task<List<Transaction>> GetTransactionsAsync(DateTime from, DateTime to, string? currencyFilter = null, StatsFilterType? typeFilter = null)
+    /// <param name="toExclusive">Первая дата после диапазона (как <c>firstOfMonth.AddMonths(1)</c>).</param>
+    public async Task<List<Transaction>> GetTransactionsAsync(DateTime from, DateTime toExclusive, string? currencyFilter = null, StatsFilterType? typeFilter = null)
     {
         var fromDate = from.Date;
-        var toDate = to.Date;
+        var endExclusive = toExclusive.Date;
         var q = _db.Transactions
             .AsNoTracking()
             .Include(t => t.Category)
-            .Where(t => t.Date >= fromDate && t.Date <= toDate);
+            .Where(t => t.Date >= fromDate && t.Date < endExclusive);
         if (!string.IsNullOrEmpty(currencyFilter))
             q = q.Where(t => t.Currency == currencyFilter);
         var list = await q.OrderByDescending(t => t.Date).ThenByDescending(t => t.Id).ToListAsync();
@@ -513,6 +514,19 @@ public class PlannerService
         await _db.SaveChangesAsync();
     }
 
+    public async Task TransferBetweenSavingsAsync(int fromSavingsEntryId, decimal fromDelta, int toSavingsEntryId, decimal toDelta)
+    {
+        if (fromSavingsEntryId == toSavingsEntryId) return;
+
+        var from = await _db.SavingsEntries.FindAsync(fromSavingsEntryId);
+        var to = await _db.SavingsEntries.FindAsync(toSavingsEntryId);
+        if (from == null || to == null) return;
+
+        from.Balance += fromDelta;
+        to.Balance += toDelta;
+        await _db.SaveChangesAsync();
+    }
+
     public async Task SaveSavingsSnapshotAsync(int year, int month, decimal totalUah)
     {
         var existing = await _db.SavingsMonthlySnapshots
@@ -541,6 +555,51 @@ public class PlannerService
             .AsNoTracking()
             .OrderBy(s => s.Year).ThenBy(s => s.Month)
             .ToListAsync();
+    }
+
+    public static DateTime NormalizePeriodNoteStart(NotePeriodKind kind, DateTime periodStart)
+    {
+        var d = periodStart.Date;
+        return kind == NotePeriodKind.Month
+            ? new DateTime(d.Year, d.Month, 1)
+            : d;
+    }
+
+    public async Task<string?> GetPeriodNoteTextAsync(NotePeriodKind kind, DateTime periodStart)
+    {
+        var key = NormalizePeriodNoteStart(kind, periodStart);
+        var n = await _db.PeriodNotes.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Kind == kind && x.PeriodStart == key);
+        return n?.Text;
+    }
+
+    public async Task SavePeriodNoteAsync(NotePeriodKind kind, DateTime periodStart, string text)
+    {
+        var key = NormalizePeriodNoteStart(kind, periodStart);
+        var existing = await _db.PeriodNotes
+            .FirstOrDefaultAsync(x => x.Kind == kind && x.PeriodStart == key);
+        var trimmed = text ?? "";
+        if (existing != null)
+        {
+            existing.Text = trimmed;
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            _db.PeriodNotes.Add(new PeriodNote
+            {
+                Kind = kind,
+                PeriodStart = key,
+                Text = trimmed,
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+        await _db.SaveChangesAsync();
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
     }
 }
 

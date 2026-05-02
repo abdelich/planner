@@ -40,6 +40,7 @@ public partial class FinanceViewModel : ObservableObject
 
     [ObservableProperty] private bool _isAddTransactionOpen;
     [ObservableProperty] private bool _isAddCategoryOpen;
+    [ObservableProperty] private OperationKind _newOperationKind = OperationKind.Expense;
     [ObservableProperty] private TransactionType _newTransactionType = TransactionType.Expense;
     [ObservableProperty] private FinanceCategory? _newTransactionCategory;
     [ObservableProperty] private string _newTransactionCurrency = CurrencyInfo.SEK;
@@ -47,6 +48,9 @@ public partial class FinanceViewModel : ObservableObject
     [ObservableProperty] private DateTime _newTransactionDate = DateTime.Today;
     [ObservableProperty] private string _newTransactionNote = "";
     [ObservableProperty] private SavingsItemViewModel? _selectedSavingsForTransaction;
+    [ObservableProperty] private bool _isTransferBetweenSavings;
+    [ObservableProperty] private SavingsItemViewModel? _transferFromSavings;
+    [ObservableProperty] private SavingsItemViewModel? _transferToSavings;
     [ObservableProperty] private string _newCategoryName = "";
     [ObservableProperty] private TransactionType _newCategoryType = TransactionType.Expense;
 
@@ -99,142 +103,9 @@ public partial class FinanceViewModel : ObservableObject
     {
         if (_loadStarted) return;
         _loadStarted = true;
+        _ = LoadAsync();
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
-        var vm = this;
-        var month = SelectedMonth;
-        var currency = SelectedCurrency;
-        var filterIndex = SelectedStatsFilterIndex;
-
-        var timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(350)
-        };
-        timer.Tick += (_, _) =>
-        {
-            timer.Stop();
-            Task.Run(() =>
-            {
-                try
-                {
-                    var snapshot = vm.BuildSnapshotOnBackground(month, currency, filterIndex);
-                    dispatcher.Invoke(() => ApplySnapshot(snapshot));
-                    Task.Run(() => LoadRatesInBackground(vm, dispatcher));
-                }
-                catch (Exception ex)
-                {
-                    dispatcher.Invoke(() =>
-                    {
-                        LoadError = "Ошибка загрузки: " + ex.Message;
-                        var raw = month.ToString("MMMM yyyy", Ru);
-                        MonthCaption = raw.Length > 0 ? char.ToUpper(raw[0], Ru) + raw[1..] : raw;
-                    });
-                }
-            });
-        };
-        timer.Start();
-    }
-
-    private FinanceLoadSnapshot BuildSnapshotOnBackground(DateTime month, string currency, int filterIndex)
-    {
-        var loadService = new PlannerService();
-        var ratesService = new ExchangeRateService();
-        var filter = filterIndex == 1 ? StatsFilterType.IncomeOnly : filterIndex == 2 ? StatsFilterType.ExpenseOnly : StatsFilterType.All;
-        var from = new DateTime(month.Year, month.Month, 1);
-        var to = from.AddMonths(1).AddDays(-1);
-
-        var incomeCats = loadService.GetFinanceCategoriesAsync(TransactionType.Income).GetAwaiter().GetResult();
-        var expenseCats = loadService.GetFinanceCategoriesAsync(TransactionType.Expense).GetAwaiter().GetResult();
-        var savingsCats = loadService.GetSavingsCategoriesAsync().GetAwaiter().GetResult();
-        var transactions = loadService.GetTransactionsAsync(from, to, null, filter).GetAwaiter().GetResult();
-        var savingsEntries = loadService.GetSavingsEntriesAsync().GetAwaiter().GetResult();
-        var rates = ratesService.GetDailyRatesAsync().GetAwaiter().GetResult();
-        var symbol = CurrencyInfo.Symbol(currency);
-
-        decimal monthIncome = 0, monthExpenses = 0;
-        var incomeByCat = new Dictionary<string, decimal>();
-        var expensesByCat = new Dictionary<string, decimal>();
-        foreach (var t in transactions)
-        {
-            var converted = t.Currency == currency
-                ? t.Amount
-                : (rates != null && ExchangeRateService.ConvertWithRates(t.Amount, t.Currency, currency, rates) is { } c ? c : 0);
-            if (t.Category.Type == TransactionType.Income)
-            {
-                monthIncome += converted;
-                incomeByCat.TryGetValue(t.Category.Name, out var v);
-                incomeByCat[t.Category.Name] = v + converted;
-            }
-            else
-            {
-                monthExpenses += converted;
-                expensesByCat.TryGetValue(t.Category.Name, out var v);
-                expensesByCat[t.Category.Name] = v + converted;
-            }
-        }
-        var incomeItems = incomeByCat.Select(kv => new CategorySumItem(kv.Key, kv.Value, symbol)).OrderByDescending(x => x.Sum).ToList();
-        var expenseItems = expensesByCat.Select(kv => new CategorySumItem(kv.Key, kv.Value, symbol)).OrderByDescending(x => x.Sum).ToList();
-        var raw = month.ToString("MMMM yyyy", Ru);
-        var monthCaption = raw.Length > 0 ? char.ToUpper(raw[0], Ru) + raw[1..] : raw;
-
-        var transactionVms = transactions.Select(t =>
-        {
-            decimal displayAmount;
-            string displaySymbol;
-            if (rates != null && ExchangeRateService.ConvertWithRates(t.Amount, t.Currency, currency, rates) is { } c)
-            {
-                displayAmount = c;
-                displaySymbol = symbol;
-            }
-            else
-            {
-                displayAmount = t.Amount;
-                displaySymbol = CurrencyInfo.Symbol(t.Currency);
-            }
-            return new TransactionItemViewModel(t, displayAmount, displaySymbol, _service, () => _ = LoadAsync());
-        }).ToList();
-
-        decimal totalSavings = 0;
-        var savingsVms = new List<SavingsItemViewModel>();
-        foreach (var e in savingsEntries)
-        {
-            var converted = e.Currency == currency
-                ? e.Balance
-                : (rates != null && ExchangeRateService.ConvertWithRates(e.Balance, e.Currency, currency, rates) is { } c ? c : 0);
-            totalSavings += converted;
-            savingsVms.Add(new SavingsItemViewModel(e, converted, symbol, _service, () => _ = LoadSavingsAsync()));
-        }
-
-        return new FinanceLoadSnapshot(
-            incomeCats, expenseCats, savingsCats,
-            monthCaption, monthIncome, monthExpenses, monthIncome - monthExpenses,
-            incomeItems, expenseItems, transactionVms, savingsVms, totalSavings);
-    }
-
-    private void ApplySnapshot(FinanceLoadSnapshot s)
-    {
-        LoadError = "";
-        IncomeCategories.Clear();
-        foreach (var c in s.IncomeCategories) IncomeCategories.Add(c);
-        ExpenseCategories.Clear();
-        foreach (var c in s.ExpenseCategories) ExpenseCategories.Add(c);
-        SavingsCategories.Clear();
-        foreach (var c in s.SavingsCategories) SavingsCategories.Add(c);
-        MonthCaption = s.MonthCaption;
-        MonthIncome = s.MonthIncome;
-        MonthExpenses = s.MonthExpenses;
-        MonthMargin = s.MonthMargin;
-        IncomeByCategory.Clear();
-        foreach (var x in s.IncomeByCategory) IncomeByCategory.Add(x);
-        ExpensesByCategory.Clear();
-        foreach (var x in s.ExpensesByCategory) ExpensesByCategory.Add(x);
-        Transactions.Clear();
-        foreach (var i in s.Transactions) Transactions.Add(i);
-        TotalSavingsDisplay = s.TotalSavingsDisplay;
-        SavingsEntries.Clear();
-        foreach (var i in s.SavingsEntries) SavingsEntries.Add(i);
-        OnPropertyChanged(nameof(TransactionCategories));
-        OnPropertyChanged(nameof(CanSaveTransaction));
-        OnPropertyChanged(nameof(CurrencySymbol));
+        Task.Run(() => LoadRatesInBackground(this, dispatcher));
     }
 
     private static void LoadRatesInBackground(FinanceViewModel vm, Dispatcher dispatcher)
@@ -276,6 +147,22 @@ public partial class FinanceViewModel : ObservableObject
         }
     }
 
+    /// <summary>Статистика и список операций за выбранный месяц — только в UI-потоке (нельзя цепочкой ContinueWith с пула потоков).</summary>
+    private async Task ReloadMonthStatsAndTransactionsAsync()
+    {
+        try
+        {
+            await LoadMonthStatsAsync(_service);
+            await LoadTransactionsAsync(_service);
+        }
+        catch (Exception ex)
+        {
+            LoadError = "Ошибка загрузки: " + ex.Message;
+            var raw = SelectedMonth.ToString("MMMM yyyy", Ru);
+            MonthCaption = raw.Length > 0 ? char.ToUpper(raw[0], Ru) + raw[1..] : raw;
+        }
+    }
+
     private async Task LoadSavingsCategoriesAsync(PlannerService loadService)
     {
         var list = await loadService.GetSavingsCategoriesAsync();
@@ -306,8 +193,8 @@ public partial class FinanceViewModel : ObservableObject
     private async Task LoadMonthStatsAsync(PlannerService loadService)
     {
         var from = new DateTime(SelectedMonth.Year, SelectedMonth.Month, 1);
-        var to = from.AddMonths(1).AddDays(-1);
-        var list = await loadService.GetTransactionsAsync(from, to, null, CurrentStatsFilter);
+        var toExclusive = from.AddMonths(1);
+        var list = await loadService.GetTransactionsAsync(from, toExclusive, null, CurrentStatsFilter);
         var rates = await _rates.GetDailyRatesAsync();
         var symbol = CurrencyInfo.Symbol(SelectedCurrency);
         decimal income = 0, expenses = 0;
@@ -350,8 +237,8 @@ public partial class FinanceViewModel : ObservableObject
     private async Task LoadTransactionsAsync(PlannerService loadService)
     {
         var from = new DateTime(SelectedMonth.Year, SelectedMonth.Month, 1);
-        var to = from.AddMonths(1).AddDays(-1);
-        var list = await loadService.GetTransactionsAsync(from, to, null, CurrentStatsFilter);
+        var toExclusive = from.AddMonths(1);
+        var list = await loadService.GetTransactionsAsync(from, toExclusive, null, CurrentStatsFilter);
         var rates = await _rates.GetDailyRatesAsync();
         var symbol = CurrencyInfo.Symbol(SelectedCurrency);
         var items = list.Select(t =>
@@ -376,9 +263,9 @@ public partial class FinanceViewModel : ObservableObject
 
     private Task LoadTransactionsAsync() => LoadTransactionsAsync(_service);
 
-    partial void OnSelectedMonthChanged(DateTime value) => _ = LoadMonthStatsAsync().ContinueWith(_ => _ = LoadTransactionsAsync());
+    partial void OnSelectedMonthChanged(DateTime value) => _ = ReloadMonthStatsAndTransactionsAsync();
     partial void OnSelectedCurrencyChanged(string value) => _ = LoadAsync();
-    partial void OnSelectedStatsFilterIndexChanged(int value) => _ = LoadMonthStatsAsync().ContinueWith(_ => _ = LoadTransactionsAsync());
+    partial void OnSelectedStatsFilterIndexChanged(int value) => _ = ReloadMonthStatsAndTransactionsAsync();
 
     partial void OnNewTransactionTypeChanged(TransactionType value)
     {
@@ -399,6 +286,7 @@ public partial class FinanceViewModel : ObservableObject
     private void OpenAddTransaction()
     {
         SaveTransactionError = "";
+        NewOperationKind = OperationKind.Expense;
         NewTransactionType = TransactionType.Expense;
         NewTransactionCategory = ExpenseCategories.FirstOrDefault();
         NewTransactionCurrency = SelectedCurrency;
@@ -406,7 +294,17 @@ public partial class FinanceViewModel : ObservableObject
         NewTransactionDate = DateTime.Today;
         NewTransactionNote = "";
         SelectedSavingsForTransaction = SavingsEntries.FirstOrDefault();
+        IsTransferBetweenSavings = false;
+        TransferFromSavings = SavingsEntries.FirstOrDefault();
+        TransferToSavings = SavingsEntries.Skip(1).FirstOrDefault() ?? TransferFromSavings;
         IsAddTransactionOpen = true;
+    }
+
+    partial void OnNewOperationKindChanged(OperationKind value)
+    {
+        IsTransferBetweenSavings = value == OperationKind.Transfer;
+        if (value == OperationKind.Income) NewTransactionType = TransactionType.Income;
+        else if (value == OperationKind.Expense) NewTransactionType = TransactionType.Expense;
     }
 
     [RelayCommand]
@@ -423,29 +321,67 @@ public partial class FinanceViewModel : ObservableObject
             SaveTransactionError = "Введите корректную сумму больше нуля.";
             return;
         }
-        if (NewTransactionCategory == null)
+        if (!IsTransferBetweenSavings && NewTransactionCategory == null)
         {
             SaveTransactionError = "Выберите категорию.";
             return;
         }
-        if (SelectedSavingsForTransaction == null)
+        if (!IsTransferBetweenSavings && SelectedSavingsForTransaction == null)
         {
             SaveTransactionError = "Выберите счёт сбережений.";
             return;
         }
+        var selectedCategory = NewTransactionCategory!;
+        var selectedAccount = SelectedSavingsForTransaction!;
         var currency = string.IsNullOrWhiteSpace(NewTransactionCurrency) ? CurrencyInfo.SEK : NewTransactionCurrency.Trim();
+        if (IsTransferBetweenSavings)
+        {
+            if (TransferFromSavings == null || TransferToSavings == null)
+            {
+                SaveTransactionError = "Выберите счёт списания и счёт зачисления.";
+                return;
+            }
+            if (TransferFromSavings.Entry.Id == TransferToSavings.Entry.Id)
+            {
+                SaveTransactionError = "Счёт списания и зачисления должны быть разными.";
+                return;
+            }
+
+            try
+            {
+                var from = TransferFromSavings.Entry;
+                var to = TransferToSavings.Entry;
+                var rates = await _rates.GetDailyRatesAsync();
+                var amountInFromCurrency = from.Currency == currency
+                    ? amount
+                    : (rates != null && ExchangeRateService.ConvertWithRates(amount, currency, from.Currency, rates) is { } fromConverted ? fromConverted : amount);
+                var amountInToCurrency = to.Currency == currency
+                    ? amount
+                    : (rates != null && ExchangeRateService.ConvertWithRates(amount, currency, to.Currency, rates) is { } toConverted ? toConverted : amount);
+
+                await _service.TransferBetweenSavingsAsync(from.Id, -amountInFromCurrency, to.Id, amountInToCurrency);
+                IsAddTransactionOpen = false;
+                await LoadAsync();
+            }
+            catch (Exception ex)
+            {
+                SaveTransactionError = "Ошибка перевода: " + ex.Message;
+            }
+            return;
+        }
+
         var t = new Transaction
         {
             Amount = amount,
             Currency = currency,
             Date = NewTransactionDate.Date,
-            CategoryId = NewTransactionCategory.Id,
+            CategoryId = selectedCategory.Id,
             Note = string.IsNullOrWhiteSpace(NewTransactionNote) ? null : NewTransactionNote.Trim()
         };
         try
         {
             await _service.AddTransactionAsync(t);
-            var account = SelectedSavingsForTransaction.Entry;
+            var account = selectedAccount.Entry;
             var rates = await _rates.GetDailyRatesAsync();
             decimal amountInAccountCurrency;
             if (account.Currency == currency)
@@ -457,8 +393,6 @@ public partial class FinanceViewModel : ObservableObject
             var delta = NewTransactionType == TransactionType.Income ? amountInAccountCurrency : -amountInAccountCurrency;
             await _service.AddDeltaToSavingsBalanceAsync(account.Id, delta);
             IsAddTransactionOpen = false;
-            SelectedMonth = NewTransactionDate.Date;
-            SelectedStatsFilterIndex = 0;
             await LoadAsync();
         }
         catch (Exception ex)
@@ -871,41 +805,14 @@ public partial class FinanceViewModel : ObservableObject
         await LoadSavingsMonthlyChartAsync();
         if (IsSavingsPanelOpen) await LoadSavingsForPanelAsync();
     }
-}
 
-internal sealed class FinanceLoadSnapshot
-{
-    public List<FinanceCategory> IncomeCategories { get; }
-    public List<FinanceCategory> ExpenseCategories { get; }
-    public List<SavingsCategory> SavingsCategories { get; }
-    public string MonthCaption { get; }
-    public decimal MonthIncome { get; }
-    public decimal MonthExpenses { get; }
-    public decimal MonthMargin { get; }
-    public List<CategorySumItem> IncomeByCategory { get; }
-    public List<CategorySumItem> ExpensesByCategory { get; }
-    public List<TransactionItemViewModel> Transactions { get; }
-    public List<SavingsItemViewModel> SavingsEntries { get; }
-    public decimal TotalSavingsDisplay { get; }
-
-    public FinanceLoadSnapshot(
-        List<FinanceCategory> incomeCategories, List<FinanceCategory> expenseCategories, List<SavingsCategory> savingsCategories,
-        string monthCaption, decimal monthIncome, decimal monthExpenses, decimal monthMargin,
-        List<CategorySumItem> incomeByCategory, List<CategorySumItem> expensesByCategory,
-        List<TransactionItemViewModel> transactions, List<SavingsItemViewModel> savingsEntries, decimal totalSavingsDisplay)
+    partial void OnIsTransferBetweenSavingsChanged(bool value)
     {
-        IncomeCategories = incomeCategories;
-        ExpenseCategories = expenseCategories;
-        SavingsCategories = savingsCategories;
-        MonthCaption = monthCaption;
-        MonthIncome = monthIncome;
-        MonthExpenses = monthExpenses;
-        MonthMargin = monthMargin;
-        IncomeByCategory = incomeByCategory;
-        ExpensesByCategory = expensesByCategory;
-        Transactions = transactions;
-        SavingsEntries = savingsEntries;
-        TotalSavingsDisplay = totalSavingsDisplay;
+        if (!value) return;
+        TransferFromSavings ??= SavingsEntries.FirstOrDefault();
+        if (TransferToSavings == null || TransferFromSavings?.Entry.Id == TransferToSavings.Entry.Id)
+            TransferToSavings = SavingsEntries.FirstOrDefault(x => TransferFromSavings == null || x.Entry.Id != TransferFromSavings.Entry.Id)
+                ?? TransferFromSavings;
     }
 }
 

@@ -24,11 +24,13 @@
             </ObjectDataProvider.MethodParameters>
         </ObjectDataProvider>
     </UserControl.Resources>
-    <Grid x:Name="RootGrid" DataContext="{StaticResource Vm}" Margin="24">
+    <Grid x:Name="RootGrid" DataContext="{StaticResource Vm}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,20">
@@ -103,7 +105,7 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Border Grid.Row="0" Background="Transparent" Padding="8,4" Margin="0,0,0,12">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -112,9 +114,9 @@
                             <Button Content="→" Command="{Binding NextPeriodCommand}" Style="{StaticResource NavButton}" Padding="12,6"/>
                         </StackPanel>
                     </Border>
-                    <TabControl Grid.Row="1" SelectedIndex="{Binding SelectedPeriodSubTabIndex}" Background="Transparent" BorderThickness="0" Margin="0,0,0,0">
+                    <StackPanel Grid.Row="1" Margin="0,0,0,8">
+                    <TabControl SelectedIndex="{Binding SelectedPeriodSubTabIndex}" Background="Transparent" BorderThickness="0" Margin="0,0,0,16" VerticalAlignment="Top">
                     <TabItem Header="День">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl ItemsSource="{Binding DayGoals}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -166,10 +168,8 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </ScrollViewer>
                     </TabItem>
                     <TabItem Header="Неделя">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl ItemsSource="{Binding WeekGoals}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -221,10 +221,8 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </ScrollViewer>
                     </TabItem>
                     <TabItem Header="Месяц">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <ItemsControl ItemsSource="{Binding MonthGoals}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -276,9 +274,17 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </ScrollViewer>
                     </TabItem>
                 </TabControl>
+                    <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0" Visibility="{Binding ShowPeriodNotes, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding PeriodNoteTitle}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8"/>
+                            <TextBox Text="{Binding PeriodNoteText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="100" MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                     Padding="10,8" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" CaretBrush="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0" BorderThickness="1"/>
+                            <Button Content="Сохранить заметку" Command="{Binding SavePeriodNoteCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0" Padding="12,6"/>
+                        </StackPanel>
+                    </Border>
+                    </StackPanel>
                 </Grid>
             </TabItem>
             <TabItem Header="Повторяемые">
@@ -316,8 +322,10 @@
                 </ScrollViewer>
             </TabItem>
         </TabControl>
+        </Grid>
+        </ScrollViewer>
 
-        <Border Grid.RowSpan="3" Background="#CC000000" Visibility="{Binding IsAddPanelOpen, Converter={StaticResource BoolToVis}}" MouseDown="AddPanelOverlay_MouseDown">
+        <Border Background="#CC000000" Visibility="{Binding IsAddPanelOpen, Converter={StaticResource BoolToVis}}" MouseDown="AddPanelOverlay_MouseDown">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Border Style="{StaticResource CardBorder}" Width="420" Margin="20" MouseDown="AddPanel_MouseDown">
                     <StackPanel>

@@ -11,9 +11,11 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private bool _runAtStartup;
 
+    private readonly Dictionary<string, object> _pageCache = new();
+
     public MainViewModel()
     {
-        CurrentPage = new Views.GoalsPage();
+        CurrentPage = GetOrCreatePage("Goals");
         RunAtStartup = StartupService.IsRunAtStartup();
     }
 
@@ -26,13 +28,23 @@ public partial class MainViewModel : ObservableObject
     private void Navigate(string page)
     {
         SelectedNav = page;
-        CurrentPage = page switch
+        var next = GetOrCreatePage(page);
+        if (next != null) CurrentPage = next;
+    }
+
+    private object? GetOrCreatePage(string page)
+    {
+        if (_pageCache.TryGetValue(page, out var cached)) return cached;
+        object? created = page switch
         {
             "Goals" => new Views.GoalsPage(),
             "Reminders" => new Views.RemindersPage(),
             "Dashboard" => new Views.DashboardPage(),
             "Finance" => new Views.FinancePage(),
-            _ => CurrentPage
+            "Assistant" => new Views.AssistantPage(),
+            _ => null
         };
+        if (created != null) _pageCache[page] = created;
+        return created;
     }
 }

@@ -63,3 +63,6 @@ coverage*.xml
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Planner local assistant settings (if ever copied into repo)
+assistant.settings.json

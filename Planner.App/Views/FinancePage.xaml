@@ -427,14 +427,107 @@
                 <StackPanel>
                     <TextBlock Text="Новая операция" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,16"/>
                     <TextBlock Text="Тип" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                    <ComboBox SelectedValue="{Binding NewTransactionType}" SelectedValuePath="Tag" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
-                        <ComboBoxItem Content="Расход" Tag="{x:Static models:TransactionType.Expense}"/>
-                        <ComboBoxItem Content="Доход" Tag="{x:Static models:TransactionType.Income}"/>
+                    <ComboBox SelectedValue="{Binding NewOperationKind}" SelectedValuePath="Tag" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
+                        <ComboBoxItem Content="Расход" Tag="{x:Static models:OperationKind.Expense}"/>
+                        <ComboBoxItem Content="Доход" Tag="{x:Static models:OperationKind.Income}"/>
+                        <ComboBoxItem Content="Перевод" Tag="{x:Static models:OperationKind.Transfer}"/>
                     </ComboBox>
-                    <TextBlock Text="Категория" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                    <ComboBox ItemsSource="{Binding TransactionCategories}" SelectedItem="{Binding NewTransactionCategory}" DisplayMemberPath="Name" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0"/>
-                    <TextBlock Text="Счёт (списать с / зачислить на)" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                    <ComboBox ItemsSource="{Binding SavingsEntries}" SelectedItem="{Binding SelectedSavingsForTransaction}" DisplayMemberPath="Entry.Name" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0"/>
+                    <TextBlock Text="Категория" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ComboBox ItemsSource="{Binding TransactionCategories}" SelectedItem="{Binding NewTransactionCategory}" DisplayMemberPath="Name" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
+                    <TextBlock Text="Счёт (списать с / зачислить на)" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ComboBox ItemsSource="{Binding SavingsEntries}" SelectedItem="{Binding SelectedSavingsForTransaction}" DisplayMemberPath="Entry.Name" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
+                    <TextBlock Text="С" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ComboBox ItemsSource="{Binding SavingsEntries}" SelectedItem="{Binding TransferFromSavings}" DisplayMemberPath="Entry.Name" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
+                    <TextBlock Text="НА" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ComboBox ItemsSource="{Binding SavingsEntries}" SelectedItem="{Binding TransferToSavings}" DisplayMemberPath="Entry.Name" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTransferBetweenSavings}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
                     <TextBlock Text="Валюта операции" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
                     <ComboBox SelectedValue="{Binding NewTransactionCurrency}" SelectedValuePath="Tag" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
                         <ComboBoxItem Content="Шведская крона (SEK)" Tag="SEK"/>

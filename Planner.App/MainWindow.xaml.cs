@@ -9,6 +9,7 @@ public partial class MainWindow : Window
     private NotifyIcon? _notifyIcon;
     private bool _isRealClose;
     private ReminderPopupService? _reminderPopupService;
+    private AssistantScheduler? _assistantScheduler;
 
     public MainWindow()
     {
@@ -22,6 +23,8 @@ public partial class MainWindow : Window
         SetupTrayIcon();
         _reminderPopupService = new ReminderPopupService();
         _reminderPopupService.Start();
+        _assistantScheduler = new AssistantScheduler();
+        _assistantScheduler.Start();
     }
 
     private void SetupTrayIcon()
@@ -67,6 +70,8 @@ public partial class MainWindow : Window
     {
         if (_isRealClose)
         {
+            _reminderPopupService?.Stop();
+            _assistantScheduler?.Dispose();
             _notifyIcon?.Dispose();
             _notifyIcon = null;
             return;

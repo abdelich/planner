@@ -36,4 +36,19 @@ public static class GoalMigration
         {
         }
     }
+
+    /// <summary>
+    /// Привязывает старые периодные цели к дате создания, чтобы не дублировались на все дни/недели/месяцы.
+    /// </summary>
+    public static void BackfillPeriodGoalStartDates(PlannerDbContext db)
+    {
+        try
+        {
+            db.Database.ExecuteSqlRaw(
+                "UPDATE Goals SET StartDate = CreatedAt WHERE Category = 0 AND StartDate IS NULL;");
+        }
+        catch
+        {
+        }
+    }
 }

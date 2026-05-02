@@ -41,7 +41,7 @@ public class ReminderPopupService
         {
             dueSlots = await Task.Run(async () =>
             {
-                var svc = new PlannerService();
+                using var svc = new PlannerService();
                 var list = await svc.GetDueReminderSlotsAsync(DateTime.Now);
                 return list;
             });
@@ -63,6 +63,10 @@ public class ReminderPopupService
 
         _dispatcher.Invoke(() =>
         {
+            // Only show popups if the main window is visible to avoid performance issues
+            var mainWindow = System.Windows.Application.Current.MainWindow;
+            if (mainWindow == null || !mainWindow.IsVisible) return;
+
             foreach (var (reminder, slot) in dueSlots)
             {
                 lock (_shownSlots)
