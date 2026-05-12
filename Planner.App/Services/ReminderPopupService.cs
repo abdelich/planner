@@ -12,6 +12,7 @@ public class ReminderPopupService
     private readonly Dispatcher _dispatcher;
     private readonly HashSet<(int ReminderId, DateTime Slot)> _shownSlots = new();
     private DispatcherTimer? _timer;
+    private bool _isTickRunning;
 
     public ReminderPopupService(Dispatcher? dispatcher = null)
     {
@@ -20,6 +21,7 @@ public class ReminderPopupService
 
     public void Start()
     {
+        if (_timer != null) return;
         _timer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
         {
             Interval = TimeSpan.FromSeconds(30)
@@ -30,65 +32,75 @@ public class ReminderPopupService
 
     public void Stop()
     {
-        _timer?.Stop();
-        _timer = null;
+        if (_timer != null)
+        {
+            _timer.Tick -= OnTick;
+            _timer.Stop();
+            _timer = null;
+        }
     }
 
     private async void OnTick(object? sender, EventArgs e)
     {
-        List<(Reminder Reminder, DateTime Slot)>? dueSlots = null;
+        if (_isTickRunning) return;
+        _isTickRunning = true;
         try
         {
-            dueSlots = await Task.Run(async () =>
+            var dueSlots = await Task.Run(async () =>
             {
                 using var svc = new PlannerService();
                 var list = await svc.GetDueReminderSlotsAsync(DateTime.Now);
                 return list;
             });
-        }
-        catch
-        {
-            return;
-        }
 
-        var today = DateTime.Today;
-        lock (_shownSlots)
-        {
-            var toRemove = _shownSlots.Where(s => s.Slot.Date < today).ToList();
-            foreach (var x in toRemove)
-                _shownSlots.Remove(x);
-        }
-
-        if (dueSlots.Count == 0) return;
-
-        _dispatcher.Invoke(() =>
-        {
-            // Only show popups if the main window is visible to avoid performance issues
-            var mainWindow = System.Windows.Application.Current.MainWindow;
-            if (mainWindow == null || !mainWindow.IsVisible) return;
-
-            foreach (var (reminder, slot) in dueSlots)
+            var today = DateTime.Today;
+            lock (_shownSlots)
             {
-                lock (_shownSlots)
-                {
-                    if (_shownSlots.Contains((reminder.Id, slot)))
-                        continue;
-                    _shownSlots.Add((reminder.Id, slot));
-                }
+                var toRemove = _shownSlots.Where(s => s.Slot.Date < today).ToList();
+                foreach (var x in toRemove)
+                    _shownSlots.Remove(x);
+            }
 
-                var wnd = new ReminderPopupWindow(reminder, slot, (reminderId, slotDt, completed) =>
+            if (dueSlots.Count == 0) return;
+
+            _dispatcher.Invoke(() =>
+            {
+                // Only show popups if the main window is visible to avoid performance issues
+                var mainWindow = System.Windows.Application.Current.MainWindow;
+                if (mainWindow == null || !mainWindow.IsVisible) return;
+
+                foreach (var (reminder, slot) in dueSlots)
                 {
+                    lock (_shownSlots)
+                    {
+                        if (_shownSlots.Contains((reminder.Id, slot)))
+                            continue;
+                        _shownSlots.Add((reminder.Id, slot));
+                    }
+
+                    var wnd = new ReminderPopupWindow(reminder, slot, (reminderId, slotDt, completed) =>
+                    {
                     if (completed)
                     {
                         _ = Task.Run(async () =>
                         {
-                            var s = new PlannerService();
-                            await s.SetReminderSlotCompletedAsync(reminderId, slotDt, true);
+                            using var s = new PlannerService();
+                            var changed = await s.SetReminderSlotCompletedAsync(reminderId, slotDt, true);
+                            if (changed)
+                                ReminderCompletionNotificationService.Publish(reminderId, slotDt, true, 1);
                         });
                     }
                 });
-                wnd.ShowDialog();
-            }
-        });
+                    wnd.ShowDialog();
+                }
+            });
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _isTickRunning = false;
+        }
     }
 }

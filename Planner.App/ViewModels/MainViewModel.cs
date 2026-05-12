@@ -9,19 +9,11 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private object? _currentPage;
     [ObservableProperty] private string _selectedNav = "Goals";
 
-    [ObservableProperty] private bool _runAtStartup;
-
     private readonly Dictionary<string, object> _pageCache = new();
 
     public MainViewModel()
     {
         CurrentPage = GetOrCreatePage("Goals");
-        RunAtStartup = StartupService.IsRunAtStartup();
-    }
-
-    partial void OnRunAtStartupChanged(bool value)
-    {
-        StartupService.SetRunAtStartup(value);
     }
 
     [RelayCommand]
@@ -42,6 +34,7 @@ public partial class MainViewModel : ObservableObject
             "Dashboard" => new Views.DashboardPage(),
             "Finance" => new Views.FinancePage(),
             "Assistant" => new Views.AssistantPage(),
+            "Settings" => new Views.SettingsPage(),
             _ => null
         };
         if (created != null) _pageCache[page] = created;

@@ -33,7 +33,8 @@
                         Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
                 <Button Content="🤖 Ассистент" Command="{Binding NavigateCommand}" CommandParameter="Assistant"
                         Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
-                <CheckBox IsChecked="{Binding RunAtStartup}" Content="Запуск с Windows" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,16,0,0" Style="{StaticResource CheckBoxStyle}"/>
+                <Button Content="⚙ Настройки" Command="{Binding NavigateCommand}" CommandParameter="Settings"
+                        Style="{StaticResource NavButton}" Margin="0,0,0,4"/>
             </StackPanel>
         </Border>
 

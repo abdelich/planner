@@ -1,11 +1,11 @@
 using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
 
 namespace Planner.App.ViewModels;
 
 public partial class ReminderSlotViewModel : ObservableObject
 {
     private readonly RemindersViewModel _parent;
+    private bool _suppressSave;
 
     public int ReminderId { get; }
     public DateTime SlotDateTime { get; }
@@ -16,15 +16,28 @@ public partial class ReminderSlotViewModel : ObservableObject
     public ReminderSlotViewModel(int reminderId, DateTime slotDateTime, bool completed, RemindersViewModel parent)
     {
         ReminderId = reminderId;
-        SlotDateTime = slotDateTime;
-        Completed = completed;
         _parent = parent;
+        SlotDateTime = Services.ReminderCompletionNotificationService.NormalizeSlot(slotDateTime);
+        _completed = completed;
     }
 
-    [RelayCommand]
-    private void Toggle()
+    partial void OnCompletedChanged(bool value)
     {
-        Completed = !Completed;
-        _parent.MarkSlotCompleted(ReminderId, SlotDateTime, Completed);
+        if (!_suppressSave)
+            _parent.MarkSlotCompleted(ReminderId, SlotDateTime, value);
+    }
+
+    internal void SetCompletedFromExternal(bool completed)
+    {
+        if (Completed == completed) return;
+        _suppressSave = true;
+        try
+        {
+            Completed = completed;
+        }
+        finally
+        {
+            _suppressSave = false;
+        }
     }
 }

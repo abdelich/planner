@@ -6,6 +6,9 @@ namespace Planner.App.Services;
 
 public class AssistantRepositoryService
 {
+    private const int MaxLoadedTextChars = 8000;
+    private const string TrimSuffix = "\n\n[Текст сокращен при загрузке, чтобы не раздувать память приложения.]";
+
     public async Task<AssistantConversation> GetOrCreateMainConversationAsync()
     {
         await using var db = new PlannerDbContext();
@@ -30,15 +33,27 @@ public class AssistantRepositoryService
         await using var db = new PlannerDbContext();
         return await db.AssistantMessages.AsNoTracking()
             .Where(x => x.ConversationId == conversationId)
-            .OrderByDescending(x => x.CreatedAt)
+            .OrderByDescending(x => x.Id)
             .Take(Math.Max(1, limit))
-            .OrderBy(x => x.CreatedAt)
+            .OrderBy(x => x.Id)
+            .Select(x => new AssistantMessage
+            {
+                Id = x.Id,
+                ConversationId = x.ConversationId,
+                Role = x.Role,
+                Content = x.Content.Length > MaxLoadedTextChars
+                    ? x.Content.Substring(0, MaxLoadedTextChars) + TrimSuffix
+                    : x.Content,
+                MetadataJson = x.MetadataJson,
+                CreatedAt = x.CreatedAt
+            })
             .ToListAsync();
     }
 
     public async Task<AssistantMessage> AddMessageAsync(int conversationId, AssistantRole role, string content, string? metadataJson = null)
     {
         await using var db = new PlannerDbContext();
+        content = TrimText(content);
         var msg = new AssistantMessage
         {
             ConversationId = conversationId,
@@ -54,6 +69,18 @@ public class AssistantRepositoryService
         return msg;
     }
 
+    public async Task ClearConversationMessagesAsync(int conversationId)
+    {
+        await using var db = new PlannerDbContext();
+        await db.AssistantMessages
+            .Where(x => x.ConversationId == conversationId)
+            .ExecuteDeleteAsync();
+        var conv = await db.AssistantConversations.FindAsync(conversationId);
+        if (conv != null)
+            conv.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
     public async Task UpsertMemoryFactAsync(string key, string value, double confidence = 1.0)
     {
         if (string.IsNullOrWhiteSpace(key)) return;
@@ -64,14 +91,14 @@ public class AssistantRepositoryService
             db.AssistantMemoryFacts.Add(new AssistantMemoryFact
             {
                 Key = key.Trim(),
-                Value = value?.Trim() ?? "",
+                Value = TrimText(value, 2000),
                 Confidence = confidence,
                 UpdatedAt = DateTime.UtcNow
             });
         }
         else
         {
-            existing.Value = value?.Trim() ?? "";
+            existing.Value = TrimText(value, 2000);
             existing.Confidence = confidence;
             existing.UpdatedAt = DateTime.UtcNow;
         }
@@ -120,12 +147,27 @@ public class AssistantRepositoryService
         return await db.AssistantTasks.AsNoTracking()
             .OrderByDescending(x => x.CreatedAt)
             .Take(Math.Max(1, limit))
+            .Select(x => new AssistantTask
+            {
+                Id = x.Id,
+                Kind = x.Kind,
+                RequestText = x.RequestText.Length > MaxLoadedTextChars
+                    ? x.RequestText.Substring(0, MaxLoadedTextChars) + TrimSuffix
+                    : x.RequestText,
+                Status = x.Status,
+                ResultText = x.ResultText != null && x.ResultText.Length > MaxLoadedTextChars
+                    ? x.ResultText.Substring(0, MaxLoadedTextChars) + TrimSuffix
+                    : x.ResultText,
+                CreatedAt = x.CreatedAt,
+                UpdatedAt = x.UpdatedAt
+            })
             .ToListAsync();
     }
 
     public async Task SaveReportAsync(AssistantReportPeriodKind kind, DateTime periodStart, string body)
     {
         await using var db = new PlannerDbContext();
+        body = TrimText(body);
         var keyDate = periodStart.Date;
         var existing = await db.AssistantReports.FirstOrDefaultAsync(x => x.Kind == kind && x.PeriodStart == keyDate);
         if (existing != null)
@@ -153,6 +195,23 @@ public class AssistantRepositoryService
             .OrderByDescending(x => x.PeriodStart)
             .ThenByDescending(x => x.CreatedAt)
             .Take(Math.Max(1, limit))
+            .Select(x => new AssistantReport
+            {
+                Id = x.Id,
+                Kind = x.Kind,
+                PeriodStart = x.PeriodStart,
+                Body = x.Body.Length > MaxLoadedTextChars
+                    ? x.Body.Substring(0, MaxLoadedTextChars) + TrimSuffix
+                    : x.Body,
+                CreatedAt = x.CreatedAt
+            })
             .ToListAsync();
+    }
+
+    private static string TrimText(string? value, int maxChars = MaxLoadedTextChars)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxChars ? trimmed : trimmed[..maxChars] + TrimSuffix;
     }
 }

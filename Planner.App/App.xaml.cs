@@ -8,8 +8,10 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        Services.AssistantDiagnosticsService.LogMemory("app-startup");
         DispatcherUnhandledException += (_, args) =>
         {
+            Services.AssistantDiagnosticsService.LogMemory("app-unhandled-exception", args.Exception.GetType().Name + ": " + args.Exception.Message);
             System.IO.File.AppendAllText(
                 System.IO.Path.Combine(
                     System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
@@ -25,6 +27,7 @@ public partial class App : System.Windows.Application
         FinanceMigration.EnsureFinanceTables(db);
         NotesMigration.EnsurePeriodNotesTable(db);
         AssistantMigration.EnsureAssistantTables(db);
+        Services.AssistantDiagnosticsService.LogMemory("app-startup-migrations-done");
     }
 }
 

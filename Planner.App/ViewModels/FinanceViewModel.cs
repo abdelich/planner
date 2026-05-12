@@ -97,6 +97,13 @@ public partial class FinanceViewModel : ObservableObject
     {
         var raw = SelectedMonth.ToString("MMMM yyyy", Ru);
         _monthCaption = raw.Length > 0 ? char.ToUpper(raw[0], Ru) + raw[1..] : raw;
+        FinanceDataChangedNotificationService.Changed += OnFinanceDataChanged;
+    }
+
+    private void OnFinanceDataChanged(FinanceDataChangedEvent change)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        dispatcher.BeginInvoke(new Action(() => _ = LoadAsync()), DispatcherPriority.Background);
     }
 
     public void StartLoad()
@@ -132,7 +139,7 @@ public partial class FinanceViewModel : ObservableObject
         LoadError = "";
         try
         {
-            var loadService = new PlannerService();
+            using var loadService = new PlannerService();
             await LoadCategoriesAsync(loadService);
             await LoadSavingsCategoriesAsync(loadService);
             await LoadMonthStatsAsync(loadService);
@@ -490,7 +497,7 @@ public partial class FinanceViewModel : ObservableObject
         var id = item.Transaction.Id;
         await Task.Run(async () =>
         {
-            var service = new PlannerService();
+            using var service = new PlannerService();
             await service.DeleteTransactionByIdAsync(id);
         });
         var toRemove = Transactions.FirstOrDefault(x => x.Transaction.Id == id);
@@ -633,7 +640,7 @@ public partial class FinanceViewModel : ObservableObject
     {
         await Task.Run(async () =>
         {
-            var service = new PlannerService();
+            using var service = new PlannerService();
             await service.DeleteSavingsEntryByIdAsync(item.Entry.Id);
         });
         var toRemove = SavingsEntries.FirstOrDefault(x => x.Entry.Id == item.Entry.Id);

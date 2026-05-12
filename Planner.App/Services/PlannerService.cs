@@ -70,14 +70,14 @@ public class PlannerService : IDisposable
     {
         goal.CreatedAt = DateTime.UtcNow;
         _db.Goals.Add(goal);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return goal;
     }
 
     public async Task UpdateGoalAsync(Goal goal)
     {
         _db.Goals.Update(goal);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task DeleteGoalAsync(Goal goal)
@@ -92,7 +92,7 @@ public class PlannerService : IDisposable
         if (goal != null)
         {
             _db.Goals.Remove(goal);
-            await _db.SaveChangesAsync();
+            await SaveChangesAndClearAsync();
         }
     }
 
@@ -108,7 +108,7 @@ public class PlannerService : IDisposable
         {
             _db.GoalCompletions.Add(new GoalCompletion { GoalId = goalId, Date = date.Date, Count = count });
         }
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task<int> GetGoalCompletionCountAsync(int goalId, DateTime from, DateTime to)
@@ -130,7 +130,7 @@ public class PlannerService : IDisposable
             .Where(c => c.GoalId == goalId && c.Date.Date == date.Date)
             .ToListAsync();
         _db.GoalCompletions.RemoveRange(toRemove);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task<List<Reminder>> GetRemindersAsync()
@@ -155,14 +155,14 @@ public class PlannerService : IDisposable
     {
         reminder.CreatedAt = DateTime.UtcNow;
         _db.Reminders.Add(reminder);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return reminder;
     }
 
     public async Task UpdateReminderAsync(Reminder reminder)
     {
         _db.Reminders.Update(reminder);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task DeleteReminderAsync(Reminder reminder)
@@ -177,24 +177,30 @@ public class PlannerService : IDisposable
         if (reminder != null)
         {
             _db.Reminders.Remove(reminder);
-            await _db.SaveChangesAsync();
+            await SaveChangesAndClearAsync();
         }
     }
 
-    public async Task SetReminderSlotCompletedAsync(int reminderId, DateTime slotDateTime, bool completed)
+    public async Task<bool> SetReminderSlotCompletedAsync(int reminderId, DateTime slotDateTime, bool completed)
     {
         var slot = slotDateTime.Date.Add(new TimeSpan(0, slotDateTime.Hour, slotDateTime.Minute, 0));
         var existing = await _db.ReminderCompletions
             .FirstOrDefaultAsync(c => c.ReminderId == reminderId && c.SlotDateTime == slot);
+        var changed = false;
         if (existing != null)
         {
-            existing.Completed = completed;
+            changed = existing.Completed != completed;
+            if (changed)
+                existing.Completed = completed;
         }
         else if (completed)
         {
             _db.ReminderCompletions.Add(new ReminderCompletion { ReminderId = reminderId, SlotDateTime = slot, Completed = true });
+            changed = true;
         }
-        await _db.SaveChangesAsync();
+        if (changed)
+            await SaveChangesAndClearAsync();
+        return changed;
     }
 
     public async Task<bool> IsReminderSlotCompletedAsync(int reminderId, DateTime slotDateTime)
@@ -254,14 +260,20 @@ public class PlannerService : IDisposable
         var today = now.Date;
         foreach (var r in reminders)
         {
-            var interval = r.IntervalMinutes < 1 ? 60 : r.IntervalMinutes;
+            var interval = Math.Clamp(r.IntervalMinutes < 1 ? 60 : r.IntervalMinutes, 1, 60 * 24 * 7);
             var from = r.ActiveFrom ?? new TimeOnly(0, 0);
             var to = r.ActiveTo ?? new TimeOnly(23, 59);
-            var totalMins = (int)(now - today).TotalMinutes;
-            var slotMins = (totalMins / interval) * interval;
-            var slotTime = TimeOnly.FromTimeSpan(TimeSpan.FromMinutes(slotMins));
-            if (slotTime < from || slotTime > to) continue;
-            var slotDateTime = today.AddMinutes(slotMins);
+            var start = today.Add(from.ToTimeSpan());
+            var end = today.Add(to.ToTimeSpan());
+            if (end < start || now < start || now > end)
+                continue;
+
+            var elapsedMinutes = (int)(now - start).TotalMinutes;
+            var slotOffsetMinutes = (elapsedMinutes / interval) * interval;
+            var slotDateTime = start.AddMinutes(slotOffsetMinutes);
+            if (slotDateTime > end)
+                continue;
+
             var completed = await IsReminderSlotCompletedAsync(r.Id, slotDateTime);
             if (!completed)
                 result.Add((r, slotDateTime));
@@ -345,7 +357,7 @@ public class PlannerService : IDisposable
     public async Task<FinanceCategory> AddFinanceCategoryAsync(FinanceCategory category)
     {
         _db.FinanceCategories.Add(category);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return category;
     }
 
@@ -354,14 +366,14 @@ public class PlannerService : IDisposable
         var c = await _db.FinanceCategories.FindAsync(id);
         if (c == null) return;
         c.Name = name?.Trim() ?? "";
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task DeleteFinanceCategoryAsync(FinanceCategory category)
     {
         await _db.Transactions.Where(t => t.CategoryId == category.Id).ExecuteDeleteAsync();
         _db.FinanceCategories.Remove(category);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     /// <param name="toExclusive">Первая дата после диапазона (как <c>firstOfMonth.AddMonths(1)</c>).</param>
@@ -388,8 +400,44 @@ public class PlannerService : IDisposable
         transaction.CreatedAt = DateTime.UtcNow;
         transaction.Category = null!;
         _db.Transactions.Add(transaction);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return transaction;
+    }
+
+    public async Task<Transaction?> GetTransactionByIdAsync(int transactionId)
+    {
+        return await _db.Transactions
+            .AsNoTracking()
+            .Include(t => t.Category)
+            .FirstOrDefaultAsync(t => t.Id == transactionId);
+    }
+
+    public async Task<bool> UpdateTransactionAsync(
+        int transactionId,
+        decimal? amount = null,
+        int? categoryId = null,
+        DateTime? date = null,
+        string? currency = null,
+        string? note = null,
+        bool updateNote = false)
+    {
+        var transaction = await _db.Transactions.FindAsync(transactionId);
+        if (transaction == null)
+            return false;
+
+        if (amount.HasValue)
+            transaction.Amount = amount.Value;
+        if (categoryId.HasValue)
+            transaction.CategoryId = categoryId.Value;
+        if (date.HasValue)
+            transaction.Date = date.Value.Date;
+        if (!string.IsNullOrWhiteSpace(currency))
+            transaction.Currency = currency.Trim().ToUpperInvariant();
+        if (updateNote)
+            transaction.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+
+        await SaveChangesAndClearAsync();
+        return true;
     }
 
     public async Task DeleteTransactionAsync(Transaction transaction)
@@ -403,7 +451,7 @@ public class PlannerService : IDisposable
         if (t != null)
         {
             _db.Transactions.Remove(t);
-            await _db.SaveChangesAsync();
+            await SaveChangesAndClearAsync();
         }
     }
 
@@ -444,7 +492,7 @@ public class PlannerService : IDisposable
     public async Task<SavingsCategory> AddSavingsCategoryAsync(SavingsCategory category)
     {
         _db.SavingsCategories.Add(category);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return category;
     }
 
@@ -453,7 +501,7 @@ public class PlannerService : IDisposable
         var c = await _db.SavingsCategories.FindAsync(id);
         if (c == null) return;
         c.Name = name;
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task<(bool Ok, string? Error)> TryDeleteSavingsCategoryAsync(int id)
@@ -464,7 +512,7 @@ public class PlannerService : IDisposable
         var c = await _db.SavingsCategories.FindAsync(id);
         if (c == null) return (true, null);
         _db.SavingsCategories.Remove(c);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return (true, null);
     }
 
@@ -483,7 +531,7 @@ public class PlannerService : IDisposable
     {
         entry.CreatedAt = DateTime.UtcNow;
         _db.SavingsEntries.Add(entry);
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
         return entry;
     }
 
@@ -493,7 +541,7 @@ public class PlannerService : IDisposable
         if (e == null) return;
         if (name != null) e.Name = name;
         if (balance.HasValue) e.Balance = balance.Value;
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task DeleteSavingsEntryByIdAsync(int id)
@@ -502,7 +550,7 @@ public class PlannerService : IDisposable
         if (e != null)
         {
             _db.SavingsEntries.Remove(e);
-            await _db.SaveChangesAsync();
+            await SaveChangesAndClearAsync();
         }
     }
 
@@ -511,7 +559,7 @@ public class PlannerService : IDisposable
         var e = await _db.SavingsEntries.FindAsync(savingsEntryId);
         if (e == null) return;
         e.Balance += delta;
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task TransferBetweenSavingsAsync(int fromSavingsEntryId, decimal fromDelta, int toSavingsEntryId, decimal toDelta)
@@ -524,7 +572,7 @@ public class PlannerService : IDisposable
 
         from.Balance += fromDelta;
         to.Balance += toDelta;
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task SaveSavingsSnapshotAsync(int year, int month, decimal totalUah)
@@ -546,7 +594,7 @@ public class PlannerService : IDisposable
                 RecordedAt = DateTime.UtcNow
             });
         }
-        await _db.SaveChangesAsync();
+        await SaveChangesAndClearAsync();
     }
 
     public async Task<List<SavingsMonthlySnapshot>> GetSavingsMonthlySnapshotsAsync()
@@ -560,9 +608,12 @@ public class PlannerService : IDisposable
     public static DateTime NormalizePeriodNoteStart(NotePeriodKind kind, DateTime periodStart)
     {
         var d = periodStart.Date;
-        return kind == NotePeriodKind.Month
-            ? new DateTime(d.Year, d.Month, 1)
-            : d;
+        return kind switch
+        {
+            NotePeriodKind.Month => new DateTime(d.Year, d.Month, 1),
+            NotePeriodKind.Week => d.AddDays(-((7 + (d.DayOfWeek - DayOfWeek.Monday)) % 7)),
+            _ => d
+        };
     }
 
     public async Task<string?> GetPeriodNoteTextAsync(NotePeriodKind kind, DateTime periodStart)
@@ -594,7 +645,13 @@ public class PlannerService : IDisposable
                 UpdatedAt = DateTime.UtcNow
             });
         }
+        await SaveChangesAndClearAsync();
+    }
+
+    private async Task SaveChangesAndClearAsync()
+    {
         await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
     }
 
     public void Dispose()

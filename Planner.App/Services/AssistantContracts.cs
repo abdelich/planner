@@ -10,6 +10,11 @@ public record AssistantLlmSettings(
     bool AllowGoalsData,
     bool AllowRemindersData);
 
+public record AssistantVoiceSettings(
+    string Hotkey,
+    int MicrophoneDeviceNumber,
+    bool SpeakAssistantResponses);
+
 public record AssistantChatTurn(
     AssistantRole Role,
     string Content,

@@ -94,7 +94,20 @@ public partial class GoalsViewModel : ObservableObject
 
     public GoalsViewModel()
     {
+        GoalCompletionNotificationService.CompletionChanged += OnGoalCompletionChanged;
         _ = LoadAsync();
+    }
+
+    private void OnGoalCompletionChanged(GoalCompletionChangedEvent change)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            _ = LoadAsync();
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() => _ = LoadAsync()));
     }
 
     public async Task LoadAsync()
@@ -533,7 +546,7 @@ public partial class GoalsViewModel : ObservableObject
         var type = item.Goal.Type;
         await Task.Run(async () =>
         {
-            var service = new PlannerService();
+            using var service = new PlannerService();
             await service.DeleteGoalByIdAsync(goalId);
         });
         if (category == GoalCategory.Period)

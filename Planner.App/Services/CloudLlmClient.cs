@@ -6,8 +6,14 @@ using Planner.App.Models;
 
 namespace Planner.App.Services;
 
-public class CloudLlmClient
+public class CloudLlmClient : IDisposable
 {
+    private const int MaxTurnContentChars = 50000;
+    private const int MaxSystemPromptChars = 120000;
+    private const int MaxResponseBodyChars = 240000;
+    private const int MaxAssistantReplyChars = 12000;
+    private const int MaxOutputTokens = 3000;
+
     private readonly HttpClient _http = new();
 
     public async Task<AssistantLlmResponse> GenerateAsync(
@@ -31,6 +37,7 @@ public class CloudLlmClient
         {
             model = string.IsNullOrWhiteSpace(settings.Model) ? "gpt-4o-mini" : settings.Model,
             temperature = 0.2,
+            max_tokens = MaxOutputTokens,
             messages = BuildMessages(systemPrompt, turns)
         };
 
@@ -43,8 +50,12 @@ public class CloudLlmClient
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey.Trim());
                 req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-                using var res = await _http.SendAsync(req, ct);
+                using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                if (res.Content.Headers.ContentLength is > MaxResponseBodyChars)
+                    throw new InvalidOperationException("LLM response is too large.");
                 var body = await res.Content.ReadAsStringAsync(ct);
+                if (body.Length > MaxResponseBodyChars)
+                    throw new InvalidOperationException("LLM response is too large.");
                 if (res.IsSuccessStatusCode)
                 {
                     using var doc = JsonDocument.Parse(body);
@@ -63,7 +74,7 @@ public class CloudLlmClient
                     continue;
                 }
 
-                throw new InvalidOperationException($"LLM request failed: {(int)res.StatusCode} {res.ReasonPhrase}. {body}");
+                throw new InvalidOperationException($"LLM request failed: {(int)res.StatusCode} {res.ReasonPhrase}. {TrimContent(body, 1500)}");
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && attempt < 2)
             {
@@ -77,13 +88,18 @@ public class CloudLlmClient
 
     private static object[] BuildMessages(string systemPrompt, IReadOnlyList<AssistantChatTurn> turns)
     {
-        var list = new List<object> { new { role = "system", content = systemPrompt } };
+        var list = new List<object> { new { role = "system", content = TrimContent(systemPrompt, MaxSystemPromptChars) } };
         foreach (var t in turns)
         {
             list.Add(new
             {
-                role = t.Role == AssistantRole.User ? "user" : "assistant",
-                content = t.Content
+                role = t.Role switch
+                {
+                    AssistantRole.User => "user",
+                    AssistantRole.System => "system",
+                    _ => "assistant"
+                },
+                content = TrimContent(t.Content, MaxTurnContentChars)
             });
         }
         return list.ToArray();
@@ -96,39 +112,126 @@ public class CloudLlmClient
 
         // Expected optional JSON envelope:
         // {"reply":"...","commands":[{"name":"create_goal","args":{"title":"...","targetCount":"1"}}]}
-        var trimmed = content.Trim();
+        var original = content.Trim();
+        var trimmed = ExtractJsonEnvelope(original);
+        if (trimmed.Length > MaxAssistantReplyChars)
+            trimmed = TrimContent(trimmed, MaxAssistantReplyChars);
         if (!trimmed.StartsWith("{", StringComparison.Ordinal))
-            return new AssistantLlmResponse(content.Trim(), Array.Empty<AssistantToolCommand>());
+            return new AssistantLlmResponse(trimmed, Array.Empty<AssistantToolCommand>());
 
         try
         {
             using var doc = JsonDocument.Parse(trimmed);
-            var reply = doc.RootElement.TryGetProperty("reply", out var replyNode)
-                ? replyNode.GetString() ?? ""
-                : content.Trim();
             var commands = new List<AssistantToolCommand>();
             if (doc.RootElement.TryGetProperty("commands", out var commandsNode) && commandsNode.ValueKind == JsonValueKind.Array)
             {
                 foreach (var cmdNode in commandsNode.EnumerateArray())
                 {
-                    var cmd = new AssistantToolCommand
-                    {
-                        Name = cmdNode.TryGetProperty("name", out var nameNode) ? nameNode.GetString() ?? "" : ""
-                    };
-                    if (cmdNode.TryGetProperty("args", out var argsNode) && argsNode.ValueKind == JsonValueKind.Object)
-                    {
-                        foreach (var p in argsNode.EnumerateObject())
-                            cmd.Args[p.Name] = p.Value.ToString();
-                    }
-                    if (!string.IsNullOrWhiteSpace(cmd.Name))
+                    if (TryParseCommandObject(cmdNode, out var cmd))
                         commands.Add(cmd);
                 }
             }
+
+            if (commands.Count == 0 && TryParseCommandObject(doc.RootElement, out var singleCommand))
+                commands.Add(singleCommand);
+
+            var reply = doc.RootElement.TryGetProperty("reply", out var replyNode)
+                ? replyNode.GetString() ?? ""
+                : commands.Count > 0
+                    ? "Выполняю действие."
+                    : trimmed;
+            reply = TrimContent(reply, MaxAssistantReplyChars);
             return new AssistantLlmResponse(reply, commands);
         }
         catch
         {
-            return new AssistantLlmResponse(content.Trim(), Array.Empty<AssistantToolCommand>());
+            return new AssistantLlmResponse(TrimContent(original, MaxAssistantReplyChars), Array.Empty<AssistantToolCommand>());
         }
+    }
+
+    private static bool TryParseCommandObject(JsonElement node, out AssistantToolCommand command)
+    {
+        command = new AssistantToolCommand();
+        if (node.ValueKind != JsonValueKind.Object)
+            return false;
+
+        string name = "";
+        if (node.TryGetProperty("name", out var nameNode))
+            name = nameNode.GetString() ?? "";
+        else if (node.TryGetProperty("command", out var commandNode))
+            name = commandNode.GetString() ?? "";
+        else if (node.TryGetProperty("tool", out var toolNode))
+            name = toolNode.GetString() ?? "";
+
+        JsonElement argsNode = node;
+        if (node.TryGetProperty("args", out var explicitArgs) && explicitArgs.ValueKind == JsonValueKind.Object)
+            argsNode = explicitArgs;
+        else if (string.IsNullOrWhiteSpace(name) &&
+                 node.TryGetProperty("amount", out _) &&
+                 node.TryGetProperty("categoryId", out _) &&
+                 node.TryGetProperty("savingsEntryId", out _))
+        {
+            name = "create_transaction";
+        }
+
+        if (string.IsNullOrWhiteSpace(name) || !AssistantToolCatalog.IsKnown(name))
+            return false;
+
+        command.Name = name.Trim();
+        foreach (var p in argsNode.EnumerateObject())
+        {
+            if (p.NameEquals("name") || p.NameEquals("command") || p.NameEquals("tool") || p.NameEquals("reply") || p.NameEquals("commands"))
+                continue;
+            command.Args[p.Name] = JsonValueToString(p.Value);
+        }
+
+        return command.Args.Count > 0 || name.StartsWith("inspect_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string JsonValueToString(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? "",
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Number => value.ToString(),
+            _ => value.ToString()
+        };
+    }
+
+    private static string ExtractJsonEnvelope(string content)
+    {
+        var trimmed = content.Trim();
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstLineEnd = trimmed.IndexOf('\n');
+            var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+            if (firstLineEnd >= 0 && lastFence > firstLineEnd)
+                trimmed = trimmed[(firstLineEnd + 1)..lastFence].Trim();
+        }
+
+        if (trimmed.StartsWith("{", StringComparison.Ordinal))
+            return trimmed;
+
+        var start = trimmed.IndexOf('{');
+        var end = trimmed.LastIndexOf('}');
+        return start >= 0 && end > start
+            ? trimmed[start..(end + 1)].Trim()
+            : trimmed;
+    }
+
+    private static string TrimContent(string? value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxChars
+            ? trimmed
+            : trimmed[..maxChars] + "\n\n[Сокращено, чтобы не раздувать память приложения.]";
+    }
+
+    public void Dispose()
+    {
+        _http.Dispose();
     }
 }

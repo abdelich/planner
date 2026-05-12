@@ -5,6 +5,8 @@ namespace Planner.App.Services;
 
 public class AssistantTelemetryService
 {
+    private const int MaxPayloadChars = 2000;
+
     public async Task TrackAsync(string eventType, string? payload = null)
     {
         try
@@ -13,7 +15,7 @@ public class AssistantTelemetryService
             db.AssistantTelemetryEvents.Add(new AssistantTelemetryEvent
             {
                 EventType = eventType ?? "",
-                Payload = payload,
+                Payload = TrimPayload(payload),
                 CreatedAt = DateTime.UtcNow
             });
             await db.SaveChangesAsync();
@@ -21,5 +23,14 @@ public class AssistantTelemetryService
         catch
         {
         }
+    }
+
+    private static string? TrimPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload)) return payload;
+        var trimmed = payload.Trim();
+        return trimmed.Length <= MaxPayloadChars
+            ? trimmed
+            : trimmed[..MaxPayloadChars] + "\n\n[Payload сокращен.]";
     }
 }

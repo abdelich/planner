@@ -16,7 +16,9 @@
         <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
             <TextBlock Text="AI Ассистент" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
             <Button Content="Создай цель" Command="{Binding InsertQuickCommandCommand}" CommandParameter="создай цель: " Style="{StaticResource NavButton}" Margin="16,0,8,0"/>
-            <Button Content="Отчет за неделю" Command="{Binding InsertQuickCommandCommand}" CommandParameter="Сформируй отчет за неделю" Style="{StaticResource NavButton}"/>
+            <Button Content="Отчет за неделю" Command="{Binding InsertQuickCommandCommand}" CommandParameter="Сформируй отчет за неделю" Style="{StaticResource NavButton}" Margin="0,0,8,0"/>
+            <Button Content="Графический отчет" Command="{Binding InsertQuickCommandCommand}" CommandParameter="Открой графический отчет за месяц" Style="{StaticResource NavButton}" Margin="0,0,8,0"/>
+            <Button Content="Очистить диалог" Command="{Binding ClearDialogCommand}" Style="{StaticResource NavButton}" Foreground="#c62828"/>
         </StackPanel>
 
         <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardBorder}" Margin="0,0,12,0">
@@ -25,12 +27,14 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <ListBox Grid.Row="0" ItemsSource="{Binding Messages}"
+                <ListBox x:Name="MessagesList"
+                         Grid.Row="0"
+                         ItemsSource="{Binding Messages}"
                          Background="Transparent" BorderThickness="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         VirtualizingStackPanel.IsVirtualizing="True"
-                         VirtualizingStackPanel.VirtualizationMode="Recycling"
+                         VirtualizingStackPanel.IsVirtualizing="False"
+                         VirtualizingPanel.ScrollUnit="Pixel"
                          HorizontalContentAlignment="Stretch">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
@@ -46,9 +50,7 @@
                             <Border Background="{StaticResource BackgroundHoverBrush}" CornerRadius="8" Padding="10" Margin="0,0,0,8">
                                 <StackPanel>
                                     <TextBlock Text="{Binding RoleText}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="12"/>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="200">
-                                        <TextBlock Text="{Binding Message.Content}" TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4,0,0"/>
-                                    </ScrollViewer>
+                                    <TextBlock Text="{Binding ContentPreview}" TextWrapping="Wrap" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,4,0,0"/>
                                     <TextBlock Text="{Binding CreatedText}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" Margin="0,6,0,0"/>
                                 </StackPanel>
                             </Border>
@@ -63,23 +65,6 @@
             <StackPanel>
                 <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
                     <StackPanel>
-                        <TextBlock Text="Настройки LLM" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8"/>
-                        <TextBlock Text="API Key (OpenAI)" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                        <TextBlock Text="{Binding KeyHint}" Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                        <TextBox Text="{Binding ApiKey, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"/>
-                        <TextBlock Text="Model" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"/>
-                        <TextBlock Text="Endpoint" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding Endpoint, UpdateSourceTrigger=PropertyChanged}" Padding="8" Margin="0,0,0,8"/>
-                        <CheckBox Content="Разрешить данные финансов" IsChecked="{Binding AllowFinanceData}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,4"/>
-                        <CheckBox Content="Разрешить данные целей" IsChecked="{Binding AllowGoalsData}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,4"/>
-                        <CheckBox Content="Разрешить данные напоминаний" IsChecked="{Binding AllowRemindersData}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,8"/>
-                        <Button Content="Сохранить настройки" Command="{Binding SaveSettingsCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                </Border>
-
-                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
-                    <StackPanel>
                         <TextBlock Text="Поручения" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,8"/>
                         <ItemsControl ItemsSource="{Binding Tasks}">
                             <ItemsControl.ItemTemplate>
@@ -87,9 +72,7 @@
                                     <StackPanel Margin="0,0,0,8">
                                         <TextBlock Text="{Binding Task.Kind}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"/>
                                         <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextSecondaryBrush}"/>
-                                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="100">
-                                            <TextBlock Text="{Binding Task.ResultText}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
-                                        </ScrollViewer>
+                                        <TextBlock Text="{Binding ResultPreview}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" MaxHeight="120"/>
                                     </StackPanel>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -109,9 +92,7 @@
                                             <Run Text=" — "/>
                                             <Run Text="{Binding DateText, Mode=OneWay}"/>
                                         </TextBlock>
-                                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="150">
-                                            <TextBlock Text="{Binding Report.Body}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
-                                        </ScrollViewer>
+                                        <TextBlock Text="{Binding BodyPreview}" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" MaxHeight="160"/>
                                     </StackPanel>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -127,7 +108,14 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox Text="{Binding DraftMessage, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" Margin="0,0,8,0"/>
+                <TextBox Text="{Binding DraftMessage, UpdateSourceTrigger=PropertyChanged}"
+                         Padding="10,8"
+                         Margin="0,0,8,0"
+                         MaxLength="8000">
+                    <TextBox.InputBindings>
+                        <KeyBinding Key="Enter" Command="{Binding SendMessageCommand}"/>
+                    </TextBox.InputBindings>
+                </TextBox>
                 <Button Grid.Column="1" Content="Отправить" Command="{Binding SendMessageCommand}" Style="{StaticResource PrimaryButton}"/>
             </Grid>
         </Border>

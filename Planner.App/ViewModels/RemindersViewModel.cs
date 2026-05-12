@@ -34,6 +34,7 @@ public partial class RemindersViewModel : ObservableObject
         _selectedYear = now.Year;
         _selectedMonth = now.Month;
         Reminders.CollectionChanged += (_, _) => ShowEmptyMessage = Reminders.Count == 0;
+        ReminderCompletionNotificationService.CompletionChanged += OnReminderCompletionChanged;
     }
 
     public void StartLoad()
@@ -42,6 +43,7 @@ public partial class RemindersViewModel : ObservableObject
         if (_isLoading) return;
         _isLoading = true;
         IsLoadingReminders = true;
+        AssistantDiagnosticsService.LogMemory("reminders-load-start");
         var year = SelectedYear;
         var month = SelectedMonth;
         var vm = this;
@@ -54,20 +56,13 @@ public partial class RemindersViewModel : ObservableObject
                 var minimalItems = await vm.BuildMinimalItemsInBackground();
                 dispatcher.Invoke(() =>
                 {
-                    try
-                    {
-                        vm.Reminders.Clear();
-                        foreach (var item in minimalItems)
-                            vm.Reminders.Add(item);
-                        vm.ShowEmptyMessage = vm.Reminders.Count == 0;
-                        vm.LoadError = string.Empty;
-                    }
-                    finally
-                    {
-                        vm._isLoading = false;
-                        vm.IsLoadingReminders = false;
-                    }
+                    vm.Reminders.Clear();
+                    foreach (var item in minimalItems)
+                        vm.Reminders.Add(item);
+                    vm.ShowEmptyMessage = vm.Reminders.Count == 0;
+                    vm.LoadError = string.Empty;
                 });
+
                 try
                 {
                     var fullItems = await vm.BuildItemsInBackground(year, month);
@@ -82,6 +77,13 @@ public partial class RemindersViewModel : ObservableObject
                 catch
                 {
                 }
+
+                dispatcher.Invoke(() =>
+                {
+                    vm._isLoading = false;
+                    vm.IsLoadingReminders = false;
+                });
+                AssistantDiagnosticsService.LogMemory("reminders-load-complete", $"items={minimalItems.Count}");
             }
             catch (Exception ex)
             {
@@ -110,9 +112,10 @@ public partial class RemindersViewModel : ObservableObject
 
     private async Task<List<ReminderItemViewModel>> BuildMinimalItemsInBackground()
     {
-        var svc = new PlannerService();
+        using var svc = new PlannerService();
         await svc.EnsureDbAsync();
         var list = await svc.GetAllRemindersAsync();
+        AssistantDiagnosticsService.LogMemory("reminders-minimal-built", $"count={list.Count}");
         var result = new List<ReminderItemViewModel>();
         foreach (var r in list)
             result.Add(new ReminderItemViewModel(r, 0, 0, new List<ReminderSlotViewModel>()));
@@ -121,16 +124,18 @@ public partial class RemindersViewModel : ObservableObject
 
     private async Task<List<ReminderItemViewModel>> BuildItemsInBackground(int year, int month)
     {
-        var svc = new PlannerService();
+        using var svc = new PlannerService();
         await svc.EnsureDbAsync();
         var list = await svc.GetAllRemindersAsync();
         var result = new List<ReminderItemViewModel>();
+        var totalVisibleSlots = 0;
         foreach (var r in list)
         {
             try
             {
                 var (completed, total) = await svc.GetReminderMonthlyProgressAsync(r.Id, year, month);
                 var daySlots = BuildTodaySlots(r, await svc.GetReminderCompletionsForDayAsync(r.Id, DateTime.Today));
+                totalVisibleSlots += daySlots.Count;
                 result.Add(new ReminderItemViewModel(r, completed, total, daySlots));
             }
             catch
@@ -138,12 +143,13 @@ public partial class RemindersViewModel : ObservableObject
                 result.Add(new ReminderItemViewModel(r, 0, 0, new List<ReminderSlotViewModel>()));
             }
         }
+        AssistantDiagnosticsService.LogMemory("reminders-full-built", $"count={result.Count};visibleSlots={totalVisibleSlots}");
         return result;
     }
 
     private List<ReminderSlotViewModel> BuildTodaySlots(Reminder r, List<ReminderCompletion> completions)
     {
-        var interval = r.IntervalMinutes < 1 ? 60 : r.IntervalMinutes;
+        var interval = Math.Clamp(r.IntervalMinutes < 1 ? 60 : r.IntervalMinutes, 1, 60 * 24 * 7);
         var today = DateTime.Today;
         var from = r.ActiveFrom ?? new TimeOnly(0, 0);
         var to = r.ActiveTo ?? new TimeOnly(23, 59);
@@ -152,26 +158,25 @@ public partial class RemindersViewModel : ObservableObject
             if (c.Completed)
                 completedSet.Add(c.SlotDateTime);
 
-        var slotTimes = new List<DateTime>();
-        var t = from;
-        while (t <= to)
-        {
-            slotTimes.Add(new DateTime(today.Year, today.Month, today.Day, t.Hour, t.Minute, 0));
-            t = t.Add(TimeSpan.FromMinutes(interval));
-        }
+        var start = today.Add(from.ToTimeSpan());
+        var end = today.Add(to.ToTimeSpan());
+        if (end < start)
+            return new List<ReminderSlotViewModel>();
 
-        if (slotTimes.Count > MaxSlotsPerDay)
-        {
-            var step = slotTimes.Count / MaxSlotsPerDay;
-            var sampled = new List<DateTime>();
-            for (var i = 0; i < slotTimes.Count && sampled.Count < MaxSlotsPerDay; i += step)
-                sampled.Add(slotTimes[i]);
-            slotTimes = sampled;
-        }
+        var totalSlots = Math.Max(1, (int)Math.Floor((end - start).TotalMinutes / interval) + 1);
+        var sampleEvery = Math.Max(1, (int)Math.Ceiling(totalSlots / (double)MaxSlotsPerDay));
 
         var slots = new List<ReminderSlotViewModel>();
-        foreach (var slotDt in slotTimes)
+        var visibleIndex = 0;
+        for (var index = 0; index < totalSlots && visibleIndex < MaxSlotsPerDay; index += sampleEvery)
+        {
+            var slotDt = start.AddMinutes(index * interval);
+            if (slotDt > end)
+                break;
             slots.Add(new ReminderSlotViewModel(r.Id, slotDt, completedSet.Contains(slotDt), this));
+            visibleIndex++;
+        }
+
         return slots;
     }
 
@@ -179,9 +184,36 @@ public partial class RemindersViewModel : ObservableObject
     {
         Task.Run(async () =>
         {
-            var svc = new PlannerService();
-            await svc.SetReminderSlotCompletedAsync(reminderId, slotDateTime, completed);
+            using var svc = new PlannerService();
+            var changed = await svc.SetReminderSlotCompletedAsync(reminderId, slotDateTime, completed);
+            if (changed)
+                ReminderCompletionNotificationService.Publish(reminderId, slotDateTime, completed, completed ? 1 : -1);
         });
+    }
+
+    private void OnReminderCompletionChanged(ReminderCompletionChangedEvent change)
+    {
+        var dispatcher = _dispatcher ?? System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        if (dispatcher.CheckAccess())
+        {
+            ApplyReminderCompletionChanged(change);
+        }
+        else
+        {
+            dispatcher.Invoke(() => ApplyReminderCompletionChanged(change));
+        }
+    }
+
+    private void ApplyReminderCompletionChanged(ReminderCompletionChangedEvent change)
+    {
+        var item = Reminders.FirstOrDefault(x => x.Reminder.Id == change.ReminderId);
+        if (item == null) return;
+
+        var slot = item.TodaySlots.FirstOrDefault(x => x.SlotDateTime == change.SlotDateTime);
+        slot?.SetCompletedFromExternal(change.Completed);
+
+        if (change.SlotDateTime.Year == SelectedYear && change.SlotDateTime.Month == SelectedMonth)
+            item.MonthCompleted = Math.Clamp(item.MonthCompleted + change.MonthDelta, 0, Math.Max(item.MonthTotal, 0));
     }
 
     [RelayCommand]
@@ -228,7 +260,7 @@ public partial class RemindersViewModel : ObservableObject
 
         Task.Run(async () =>
         {
-            var svc = new PlannerService();
+            using var svc = new PlannerService();
             var entity = await svc.GetReminderByIdAsync(id);
             if (entity != null)
             {
@@ -271,7 +303,7 @@ public partial class RemindersViewModel : ObservableObject
         {
             try
             {
-                var svc = new PlannerService();
+                using var svc = new PlannerService();
                 var reminder = new Reminder
                 {
                     Title = title,
@@ -295,7 +327,7 @@ public partial class RemindersViewModel : ObservableObject
         Reminders.Remove(item);
         Task.Run(async () =>
         {
-            var svc = new PlannerService();
+            using var svc = new PlannerService();
             await svc.DeleteReminderByIdAsync(reminderId);
         });
     }

@@ -14,6 +14,7 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
     private AssistantOrchestratorService Orchestrator => _orchestrator ??= new AssistantOrchestratorService();
     private bool _loadStarted;
     private int _lastConversationId = -1;
+    private int _temporaryMessageId = -1;
 
     [ObservableProperty] private ObservableCollection<AssistantMessageItemViewModel> _messages = new();
     [ObservableProperty] private ObservableCollection<AssistantTaskItemViewModel> _tasks = new();
@@ -31,10 +32,18 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _keyHint = "";
     [ObservableProperty] private bool _isApiKeyReadOnly;
 
+    public string DiagnosticsPath => AssistantDiagnosticsService.LogPath;
+
+    public AssistantViewModel()
+    {
+        AssistantConversationChangedNotificationService.Changed += OnConversationChanged;
+    }
+
     public void StartLoad()
     {
         if (_loadStarted) return;
         _loadStarted = true;
+        AssistantDiagnosticsService.LogMemory("assistant-start-load");
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher != null)
         {
@@ -47,14 +56,39 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
+    private bool CanSendMessage()
+    {
+        return !IsBusy && !string.IsNullOrWhiteSpace(DraftMessage);
+    }
+
+    partial void OnDraftMessageChanged(string value)
+    {
+        SendMessageCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsBusyChanged(bool value)
+    {
+        SendMessageCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSendMessage))]
     private async Task SendMessage()
     {
-        if (IsBusy) return;
         var text = DraftMessage?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(text)) return;
 
         IsBusy = true;
+        DraftMessage = "";
+        var optimisticMessage = new AssistantMessageItemViewModel(new AssistantMessage
+        {
+            Id = _temporaryMessageId--,
+            ConversationId = _lastConversationId > 0 ? _lastConversationId : 0,
+            Role = AssistantRole.User,
+            Content = text,
+            CreatedAt = DateTime.UtcNow
+        });
+        Messages.Add(optimisticMessage);
+        AssistantDiagnosticsService.LogMemory("assistant-send-start", $"chars={text.Length}");
         StatusText = "Ассистент думает...";
         try
         {
@@ -67,13 +101,12 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
                             summary,
                             "Planner — подтверждение",
                             System.Windows.MessageBoxButton.YesNo,
-                            System.Windows.MessageBoxImage.Question) == System.Windows.MessageBoxResult.Yes);
+                        System.Windows.MessageBoxImage.Question) == System.Windows.MessageBoxResult.Yes);
                 });
-            DraftMessage = "";
             await ReloadMessagesAsync(result.Conversation.Id);
             await ReloadTasksAndReportsAsync();
             StatusText = "";
-            GC.Collect(1, GCCollectionMode.Optimized);
+            AssistantDiagnosticsService.LogMemory("assistant-send-complete");
         }
         catch (Exception ex)
         {
@@ -89,6 +122,16 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
     private void InsertQuickCommand(string commandText)
     {
         DraftMessage = commandText ?? "";
+    }
+
+    [RelayCommand]
+    private async Task ClearDialog()
+    {
+        var conversation = await _repo.GetOrCreateMainConversationAsync();
+        await _repo.ClearConversationMessagesAsync(conversation.Id);
+        Messages.Clear();
+        _lastConversationId = conversation.Id;
+        StatusText = "Диалог очищен.";
     }
 
     [RelayCommand]
@@ -114,6 +157,8 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
         {
             var (ui, msgItems, taskItems, reportItems) = await Task.Run(async () =>
             {
+                AssistantDiagnosticsService.LogMemory("assistant-load-bg-start");
+                await AssistantDiagnosticsService.LogAssistantDatabaseStatsAsync("assistant-db-before-load");
                 var u = _settings.GetUiSettings();
                 var conv = await _repo.GetOrCreateMainConversationAsync();
                 var m = await _repo.GetRecentMessagesAsync(conv.Id, 10);
@@ -122,6 +167,7 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
                 var mvm = m.Select(x => new AssistantMessageItemViewModel(x)).ToList();
                 var tvm = t.Select(x => new AssistantTaskItemViewModel(x)).ToList();
                 var rvm = r.Select(x => new AssistantReportItemViewModel(x)).ToList();
+                AssistantDiagnosticsService.LogMemory("assistant-load-bg-done", $"messages={mvm.Count};tasks={tvm.Count};reports={rvm.Count}");
                 return (u, mvm, tvm, rvm);
             });
 
@@ -138,6 +184,10 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
             Tasks = new ObservableCollection<AssistantTaskItemViewModel>(taskItems);
             Reports = new ObservableCollection<AssistantReportItemViewModel>(reportItems);
             _lastConversationId = (await _repo.GetOrCreateMainConversationAsync()).Id;
+            AssistantDiagnosticsService.LogMemory("assistant-load-ui-bound", $"messages={Messages.Count};tasks={Tasks.Count};reports={Reports.Count}");
+            await System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                AssistantDiagnosticsService.LogMemory("assistant-load-after-render")),
+                System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
         catch (Exception ex)
         {
@@ -154,20 +204,10 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
                 var m = await _repo.GetRecentMessagesAsync(conversationId, 15);
                 return m.Select(x => new AssistantMessageItemViewModel(x)).ToList();
             });
-            
-            // Обновляем коллекцию инкрементально вместо пересоздания
-            var existingIds = new HashSet<int>(Messages.Select(x => x.Message.Id));
-            var newItems = list.Where(x => !existingIds.Contains(x.Message.Id)).ToList();
-            
-            if (newItems.Count > 0)
-            {
-                foreach (var item in newItems)
-                    Messages.Add(item);
-                
-                // Если сообщений больше чем надо, удаляем старые
-                while (Messages.Count > 15)
-                    Messages.RemoveAt(0);
-            }
+
+            Messages = new ObservableCollection<AssistantMessageItemViewModel>(
+                list.OrderBy(x => x.Message.Id));
+            _lastConversationId = conversationId;
         }
         catch (Exception ex)
         {
@@ -211,7 +251,27 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        AssistantDiagnosticsService.LogMemory("assistant-vm-dispose");
+        AssistantConversationChangedNotificationService.Changed -= OnConversationChanged;
+        _orchestrator?.Dispose();
         _orchestrator = null;
+    }
+
+    private void OnConversationChanged(int conversationId)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            _ = ReloadMessagesAsync(conversationId);
+            _ = ReloadTasksAndReportsAsync();
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(async () =>
+        {
+            await ReloadMessagesAsync(conversationId);
+            await ReloadTasksAndReportsAsync();
+        }));
     }
 }
 
@@ -221,6 +281,7 @@ public class AssistantMessageItemViewModel
     public bool IsUser => Message.Role == AssistantRole.User;
     public string RoleText => Message.Role == AssistantRole.User ? "Вы" : "Ассистент";
     public string CreatedText => Message.CreatedAt.ToLocalTime().ToString("dd.MM HH:mm");
+    public string ContentPreview => AssistantTextPreview.Preview(Message.Content, 12000);
 
     public AssistantMessageItemViewModel(AssistantMessage message)
     {
@@ -237,6 +298,7 @@ public class AssistantTaskItemViewModel
         AssistantTaskStatus.Failed => "Ошибка",
         _ => "В процессе"
     };
+    public string ResultPreview => AssistantTextPreview.Preview(Task.ResultText, 1500);
 
     public AssistantTaskItemViewModel(AssistantTask task)
     {
@@ -255,9 +317,22 @@ public class AssistantReportItemViewModel
         _ => "Отчет"
     };
     public string DateText => Report.PeriodStart.ToString("dd.MM.yyyy");
+    public string BodyPreview => AssistantTextPreview.Preview(Report.Body, 2000);
 
     public AssistantReportItemViewModel(AssistantReport report)
     {
         Report = report;
+    }
+}
+
+internal static class AssistantTextPreview
+{
+    public static string Preview(string? value, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxChars
+            ? trimmed
+            : trimmed[..maxChars] + "\n\n[Показано превью. Полный текст хранится в истории.]";
     }
 }

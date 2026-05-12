@@ -57,7 +57,7 @@
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Border Background="{StaticResource BackgroundHoverBrush}" CornerRadius="6" Padding="8,6" Margin="0,0,8,8">
-                                                    <CheckBox IsChecked="{Binding Completed}" Command="{Binding ToggleCommand}" Style="{StaticResource CheckBoxStyle}" Content="{Binding TimeText}"/>
+                                                    <CheckBox IsChecked="{Binding Completed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource CheckBoxStyle}" Content="{Binding TimeText}"/>
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>

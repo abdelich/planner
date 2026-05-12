@@ -5,20 +5,39 @@ namespace Planner.App.Services;
 public class AssistantScheduler : IDisposable
 {
     private readonly ReportGenerator _reportGenerator = new();
-    private readonly AssistantRepositoryService _repo = new();
     private readonly AssistantTelemetryService _telemetry = new();
+    private readonly Dispatcher _dispatcher;
     private DispatcherTimer? _timer;
+    private bool _isTickRunning;
+
+    public AssistantScheduler(Dispatcher? dispatcher = null)
+    {
+        _dispatcher = dispatcher ?? System.Windows.Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+    }
 
     public void Start()
     {
         if (_timer != null) return;
-        _timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
+        _timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, _dispatcher)
         {
             Interval = TimeSpan.FromMinutes(30)
         };
-        _timer.Tick += async (_, _) => await TickAsync();
-        // Delay the first tick to avoid running heavy DB work immediately on app start
-        Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => _timer.Start());
+        _timer.Tick += OnTick;
+        _timer.Start();
+    }
+
+    private async void OnTick(object? sender, EventArgs e)
+    {
+        if (_isTickRunning) return;
+        _isTickRunning = true;
+        try
+        {
+            await TickAsync();
+        }
+        finally
+        {
+            _isTickRunning = false;
+        }
     }
 
     private async Task TickAsync()
@@ -27,17 +46,6 @@ public class AssistantScheduler : IDisposable
         {
             var now = DateTime.Now;
             await Task.Run(() => _reportGenerator.SavePeriodicReportsAsync(now));
-            if (now.Hour is >= 20 and <= 22)
-            {
-                await Task.Run(async () =>
-                {
-                    var conv = await _repo.GetOrCreateMainConversationAsync();
-                    await _repo.AddMessageAsync(
-                        conv.Id,
-                        Models.AssistantRole.Assistant,
-                        "Вечерний check-in: как прошел день по целям и что улучшим завтра?");
-                });
-            }
             await _telemetry.TrackAsync("assistant_scheduler_tick_ok");
         }
         catch (Exception ex)
@@ -48,7 +56,12 @@ public class AssistantScheduler : IDisposable
 
     public void Dispose()
     {
-        _timer?.Stop();
+        if (_timer != null)
+        {
+            _timer.Tick -= OnTick;
+            _timer.Stop();
+            _timer = null;
+        }
         _reportGenerator.Dispose();
     }
 }
