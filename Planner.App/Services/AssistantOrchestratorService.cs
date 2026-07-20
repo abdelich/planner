@@ -47,9 +47,9 @@ public class AssistantOrchestratorService : IDisposable
         var systemPrompt = BuildSystemPrompt(memoryFacts, snapshot);
 
         var agentTurns = recentMessages
+            .Where(x => x.Role is AssistantRole.User or AssistantRole.Assistant)
             .Select(x => new AssistantChatTurn(x.Role, x.Content, x.CreatedAt))
             .ToList();
-        var pendingCommands = (IReadOnlyList<AssistantToolCommand>)Array.Empty<AssistantToolCommand>();
         var executedCommandSignatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var allCommandResults = new List<string>();
         var allAgentResultLines = new List<string>();
@@ -58,69 +58,52 @@ public class AssistantOrchestratorService : IDisposable
 
         for (var step = 1; step <= MaxAgentSteps; step++)
         {
-            if (pendingCommands.Count == 0)
+            IReadOnlyList<AssistantToolCommand> commands;
+            try
             {
-                try
+                if (step > 1)
                 {
-                    if (step > 1)
-                    {
-                        snapshot = await BuildContextSnapshotAsync(settings);
-                        systemPrompt = BuildSystemPrompt(memoryFacts, snapshot);
-                    }
+                    snapshot = await BuildContextSnapshotAsync(settings);
+                    systemPrompt = BuildSystemPrompt(memoryFacts, snapshot);
+                }
 
-                    var llmResponse = await _llm.GenerateAsync(settings, systemPrompt, agentTurns, ct);
-                    replyText = llmResponse.ReplyText;
-                    pendingCommands = llmResponse.Commands;
-                    if (pendingCommands.Count == 0 &&
-                        executedCommandSignatures.Count == 0 &&
-                        await TryBuildRequiredActionCommandAsync(text, recentMessages) is { } forcedAction)
-                    {
-                        pendingCommands = new[] { forcedAction };
-                        replyText = "Выполняю действие через инструмент.";
-                        await _telemetry.TrackAsync("assistant_forced_action", forcedAction.Name);
-                    }
-                    else if (pendingCommands.Count == 0 &&
-                        executedCommandSignatures.Count == 0 &&
-                        TryBuildRequiredInspectionCommand(text, recentMessages, out var forcedInspection))
-                    {
-                        pendingCommands = new[] { forcedInspection };
-                        replyText = "Проверяю данные в базе.";
-                        await _telemetry.TrackAsync("assistant_forced_inspection", forcedInspection.Name);
-                    }
-                    await _telemetry.TrackAsync("assistant_llm_ok", $"step={step};commands={pendingCommands.Count}");
-                }
-                catch (Exception ex)
-                {
-                    await _telemetry.TrackAsync("assistant_llm_error", ex.Message);
-                    replyText = allCommandResults.Count > 0
-                        ? "Действия выполнены, но не удалось получить финальный ответ модели. Проверьте ключ/сеть, если нужен развернутый вывод."
-                        : "Не удалось обратиться к модели. Проверьте API-ключ в настройках ассистента, переменную OPENAI_API_KEY или сеть.";
-                    pendingCommands = Array.Empty<AssistantToolCommand>();
-                }
+                var llmResponse = await _llm.GenerateAsync(settings, systemPrompt, agentTurns, ct);
+                replyText = llmResponse.ReplyText;
+                commands = llmResponse.Commands;
+                await _telemetry.TrackAsync("assistant_llm_ok", $"step={step};commands={commands.Count}");
+            }
+            catch (Exception ex)
+            {
+                await _telemetry.TrackAsync("assistant_llm_error", ex.Message);
+                AssistantDiagnosticsService.LogMemory("assistant-llm-error", ex.ToString());
+                var details = TrimForPrompt(ex.Message, 1200);
+                replyText = allCommandResults.Count > 0
+                    ? $"Действия выполнены, но модель вернула ошибку:\n{details}"
+                    : $"Ошибка LLM:\n{details}";
+                commands = Array.Empty<AssistantToolCommand>();
+                break;
             }
 
-            if (pendingCommands.Count == 0)
+            if (commands.Count == 0)
                 break;
 
             agentTurns.Add(new AssistantChatTurn(
                 AssistantRole.Assistant,
-                FormatAssistantStepForAgent(replyText, pendingCommands),
-                DateTime.UtcNow));
+                replyText ?? "",
+                DateTime.UtcNow,
+                ToolCalls: commands));
 
             var batch = await ExecuteCommandsAsync(
-                pendingCommands,
+                commands,
                 text,
                 confirmRiskyCommandAsync,
                 executedCommandSignatures);
             allCommandResults.AddRange(batch.UserLines);
             allAgentResultLines.AddRange(batch.AgentLines);
 
-            agentTurns.Add(new AssistantChatTurn(
-                AssistantRole.System,
-                BuildToolResultsTurn(step, batch.AgentLines),
-                DateTime.UtcNow));
+            foreach (var toolTurn in batch.ToolTurns)
+                agentTurns.Add(toolTurn);
 
-            pendingCommands = Array.Empty<AssistantToolCommand>();
             replyText = "";
 
             if (step == MaxAgentSteps)
@@ -355,44 +338,25 @@ public class AssistantOrchestratorService : IDisposable
             ? "No memory facts yet."
             : string.Join("\n", memoryFacts.Select(m => $"- {TrimForPrompt(m.Key, 120)}: {TrimForPrompt(m.Value)}"));
         return
-            "You are a personal life-planner copilot inside a desktop app.\n" +
-            "Answer in Russian, concise and practical.\n" +
-            "Use Current app context as the source of truth.\n" +
-            "Work as a supervised production agent: planner chooses the next tool call, executor runs tools, critic checks facts before the final reply.\n" +
-            "Every user-facing answer must come from this agent loop. There are no local shortcut answers in normal mode.\n" +
-            "If the user asks for goals for today/day, answer from GoalsDueToday only.\n" +
-            "If the user asks for weekly goals, use GoalsThisWeek; for monthly goals, use GoalsThisMonth.\n" +
-            "Do not mix all goals into day/week/month answers unless the user asks for all goals.\n" +
-            "You are running in a multi-step agent loop. The app may execute your commands, then send TOOL RESULTS back to you.\n" +
-            "After TOOL RESULTS, inspect what actually happened and either return the next needed commands or a final Russian answer with no commands.\n" +
-            $"Use at most {MaxCommandsPerAgentStep} commands per step and prefer the smallest reliable sequence.\n" +
-            "Do not repeat commands that TOOL RESULTS already say were executed successfully.\n" +
-            "If ids or required details are missing, ask a short clarifying question instead of inventing ids.\n" +
-            "For any question about app data, database state, previous periods, goals, reminders, finances, reports, notes, categories, accounts, or transactions, use an inspect_* or report tool before the final answer.\n" +
-            "For exchange-rate questions or finance calculations that require conversion, use inspect_exchange_rates/get_exchange_rates before the final answer.\n" +
-            "Do not answer database/status questions from chat history alone; chat history is only conversation context, not the source of truth.\n" +
-            "Prefer complete database-backed answers. If the compact context is not enough, call the relevant inspect_* tool and rely on TOOL RESULTS.\n" +
-            "When the user asks you to change app data, return JSON commands so the app can execute them.\n" +
-            "Never say that you created, updated, deleted, completed, saved, moved, or generated something unless you also return the matching command.\n" +
-            "Never promise a future action either. If you write any of: 'добавлю', 'создам', 'сохраню', 'обновлю', 'удалю', 'отмечу', 'сформирую', 'выполняю', 'делаю', 'сейчас', 'подождите', 'минутку', 'I will', 'I'll', 'let me', 'one moment' — you MUST also include the matching tool call in commands[] in the SAME response. Otherwise ask a short clarifying question, or just answer in past tense after the action is actually done.\n" +
-            "If you already have enough information to act (title, kind, recurrence, period, ids), DO NOT ask 'wait a moment' — emit the command immediately in commands[] and write a short confirmation in 'reply'.\n" +
-            "Never show raw command JSON to the user as the final answer. Put tool calls only into commands[].\n" +
-            "Always return either plain Russian text for ordinary conversation, or this exact JSON envelope for agent actions:\n" +
-            "{\n" +
-            "  \"reply\":\"human answer\",\n" +
-            "  \"commands\":[{\"name\":\"create_goal\",\"args\":{\"title\":\"...\",\"targetCount\":\"1\"}}]\n" +
-            "}\n" +
-            "Use exact ids from context for update/delete/complete commands.\n" +
-            "For report requests always call generate_report instead of answering from memory. Set kind=day/week/month and date or year/month.\n" +
-            "For graphical/visual/chart report requests call open_graphical_report. Set kind=day/week/month and domain=finance/goals/reminders/general.\n" +
-            "For financial reports use domain=finance. For goal reports use domain=goals. For reminder reports use domain=reminders. Otherwise use domain=general.\n" +
-            "For financial reports and graphical finance reports, set targetCurrency=UAH/SEK/USD when the user asks for a report currency; if not specified, the tool defaults to UAH and aggregates categories after conversion.\n" +
-            "If the user says a month name like April/апрель without a year, resolve it as the most recent matching month not after CurrentLocalDate.\n" +
-            "Never add or subtract money across different currencies yourself; use finance report tools or exchange-rate tools for conversion-backed totals.\n" +
-            "Only include commands when user explicitly asks to execute something.\n" +
-            "For create_transaction use real categoryId and savingsEntryId from context (Savings: id=...).\n" +
-            "Do not set confirm in args; the user confirms in the app UI.\n\n" +
-            AssistantToolCatalog.RenderForPrompt() + "\n\n" +
+            "You are a personal life-planner copilot inside a desktop app. Reply in Russian, concise and practical.\n" +
+            "You have access to typed tools (OpenAI function calling). Decide between three options on every turn:\n" +
+            "1) Call one or more tools — when the user wants something done or you need data.\n" +
+            "2) Reply in plain Russian text with NO tool calls — when the action is complete or no action is needed.\n" +
+            "3) Reply with a short clarifying question — only if the user's wording is genuinely ambiguous about WHAT to do or WHICH item to act on.\n" +
+            "\n" +
+            "Rules:\n" +
+            "- If you have enough info to act, call the tool immediately. Do NOT write 'я добавлю', 'подождите', 'сейчас сделаю', 'I will', 'let me' — either call the tool now or ask a real clarifying question.\n" +
+            "- Optional arguments have sensible defaults. Do NOT ask about them when the user did not bring them up. create_goal needs only title; defaults: category=period+type=daily unless user says 'каждый день/повторяй/привычка' (then category=recurring, recurrenceKind=everyday), targetCount=1, description=empty. create_reminder: intervalMinutes=60, activeFrom/activeTo unset means whole day.\n" +
+            "- For any question about app data (goals, reminders, finance, accounts, transactions, reports, notes, history, status), call an inspect_* tool first; never answer database/status questions from chat history alone.\n" +
+            "- For report requests call generate_report; for graphical/chart requests call open_graphical_report. Pick domain=finance/goals/reminders/general accordingly.\n" +
+            "- For finance numbers across currencies, do not add/subtract yourself — use inspect_exchange_rates or a finance report with targetCurrency.\n" +
+            "- When the user asks for goals today/this week/this month, answer from GoalsDueToday / GoalsThisWeek / GoalsThisMonth only, not the full list.\n" +
+            "- Use real ids from Current app context for update/delete/complete. Do not invent ids.\n" +
+            "- Do not call confirm in args; the desktop UI prompts the user for risky finance ops.\n" +
+            $"- Up to {MaxCommandsPerAgentStep} tool calls per step. After tool results come back, decide the next step or give the final Russian answer.\n" +
+            "- Never claim 'создал/удалил/сохранил/обновил' something unless the matching tool call in this turn succeeded.\n" +
+            "- If the user says a month like 'апрель/April' without a year, resolve it as the most recent past matching month.\n" +
+            "\n" +
             "Memory facts:\n" +
             memoryLines + "\n\n" +
             "Current app context:\n" +
@@ -517,8 +481,14 @@ public class AssistantOrchestratorService : IDisposable
     {
         var userLines = new List<string>();
         var agentLines = new List<string>();
-        foreach (var command in commands.Take(MaxCommandsPerAgentStep))
+        var toolTurns = new List<AssistantChatTurn>();
+        var processed = 0;
+        foreach (var command in commands)
         {
+            if (processed >= MaxCommandsPerAgentStep)
+                break;
+            processed++;
+
             var validation = AssistantToolCatalog.Validate(command);
             if (!validation.Success)
             {
@@ -526,15 +496,16 @@ public class AssistantOrchestratorService : IDisposable
                 await _repo.CompleteTaskAsync(validationTask.Id, false, validation.Message);
                 userLines.Add($"{command?.Name ?? "command"}: ошибка валидации — {validation.Message}");
                 agentLines.Add($"{command?.Name ?? "command"}: validation_failed; {validation.Message}");
+                toolTurns.Add(BuildToolResultTurn(command, $"validation_failed: {validation.Message}"));
                 continue;
             }
 
             var signature = CommandSignature(command);
             if (!executedCommandSignatures.Add(signature))
             {
-                var duplicateLine = $"{command.Name}: skipped duplicate command.";
                 userLines.Add($"{command.Name}: пропущен повтор команды.");
-                agentLines.Add(duplicateLine);
+                agentLines.Add($"{command.Name}: skipped_duplicate");
+                toolTurns.Add(BuildToolResultTurn(command, "skipped_duplicate"));
                 continue;
             }
 
@@ -550,6 +521,7 @@ public class AssistantOrchestratorService : IDisposable
                     await _repo.CompleteTaskAsync(task.Id, false, cancelled);
                     userLines.Add($"{command.Name}: отменено пользователем.");
                     agentLines.Add($"{command.Name}: failed; {cancelled}");
+                    toolTurns.Add(BuildToolResultTurn(command, $"failed: {cancelled}"));
                     continue;
                 }
 
@@ -568,12 +540,14 @@ public class AssistantOrchestratorService : IDisposable
                     userLines.Add($"{command.Name}: {(result.Success ? "выполнено" : "ошибка")} — {userMessage}");
                 }
                 agentLines.Add($"{command.Name}: {(result.Success ? "success" : "failed")}; {TrimForPrompt(result.Message, 30000)}");
+                toolTurns.Add(BuildToolResultTurn(command, $"{(result.Success ? "success" : "failed")}: {TrimForPrompt(result.Message, MaxToolResultChars)}"));
             }
             catch (Exception ex)
             {
                 await _repo.CompleteTaskAsync(task.Id, false, ex.Message);
                 userLines.Add($"{command.Name}: ошибка — {TrimForPrompt(ex.Message, 700)}");
                 agentLines.Add($"{command.Name}: failed; exception={TrimForPrompt(ex.Message, 1400)}");
+                toolTurns.Add(BuildToolResultTurn(command, $"failed: exception {TrimForPrompt(ex.Message, 1400)}"));
             }
         }
 
@@ -584,9 +558,19 @@ public class AssistantOrchestratorService : IDisposable
             agentLines.Add($"Skipped {skipped} commands because per-step command limit is {MaxCommandsPerAgentStep}.");
         }
 
-        var batch = new CommandExecutionBatch(userLines, agentLines);
+        var batch = new CommandExecutionBatch(userLines, agentLines, toolTurns);
         AssistantDiagnosticsService.LogMemory("assistant-agent-tools", $"commands={commands.Count};results={agentLines.Count}");
         return batch;
+    }
+
+    private static AssistantChatTurn BuildToolResultTurn(AssistantToolCommand? command, string content)
+    {
+        return new AssistantChatTurn(
+            AssistantRole.Tool,
+            content,
+            DateTime.UtcNow,
+            ToolCallId: command?.ToolCallId ?? Guid.NewGuid().ToString("N"),
+            ToolName: command?.Name);
     }
 
     private static string FormatAssistantStepForAgent(string replyText, IReadOnlyList<AssistantToolCommand> commands)
@@ -858,15 +842,15 @@ public class AssistantOrchestratorService : IDisposable
 
     private static bool LooksLikeCreateGoalIntent(string normalized)
     {
-        var hasVerb =
-            normalized.Contains(" создай ", StringComparison.Ordinal) ||
-            normalized.Contains(" создать ", StringComparison.Ordinal) ||
-            normalized.Contains(" добавь ", StringComparison.Ordinal) ||
-            normalized.Contains(" добавить ", StringComparison.Ordinal) ||
-            normalized.Contains(" заведи ", StringComparison.Ordinal) ||
-            normalized.Contains(" поставь ", StringComparison.Ordinal) ||
-            normalized.Contains(" запланируй ", StringComparison.Ordinal);
         var padded = $" {normalized} ";
+        var hasVerb =
+            padded.Contains(" создай ", StringComparison.Ordinal) ||
+            padded.Contains(" создать ", StringComparison.Ordinal) ||
+            padded.Contains(" добавь ", StringComparison.Ordinal) ||
+            padded.Contains(" добавить ", StringComparison.Ordinal) ||
+            padded.Contains(" заведи ", StringComparison.Ordinal) ||
+            padded.Contains(" поставь ", StringComparison.Ordinal) ||
+            padded.Contains(" запланируй ", StringComparison.Ordinal);
         var hasNoun =
             padded.Contains(" цел", StringComparison.Ordinal) ||
             padded.Contains(" задач", StringComparison.Ordinal) ||
@@ -1049,11 +1033,12 @@ public class AssistantOrchestratorService : IDisposable
 
     private static bool LooksLikeCreateReminderIntent(string normalized)
     {
+        var padded = $" {normalized} ";
         var hasVerb =
-            normalized.Contains(" создай ", StringComparison.Ordinal) ||
-            normalized.Contains(" добавь ", StringComparison.Ordinal) ||
-            normalized.Contains(" заведи ", StringComparison.Ordinal) ||
-            normalized.Contains(" поставь ", StringComparison.Ordinal);
+            padded.Contains(" создай ", StringComparison.Ordinal) ||
+            padded.Contains(" добавь ", StringComparison.Ordinal) ||
+            padded.Contains(" заведи ", StringComparison.Ordinal) ||
+            padded.Contains(" поставь ", StringComparison.Ordinal);
         return hasVerb && normalized.Contains("напомин", StringComparison.Ordinal);
     }
 
@@ -1091,10 +1076,11 @@ public class AssistantOrchestratorService : IDisposable
     private static bool TryBuildSavePeriodNoteCommand(string userText, string normalized, out AssistantToolCommand command)
     {
         command = new AssistantToolCommand();
-        if (!normalized.Contains(" заметк", StringComparison.Ordinal) ||
-            !(normalized.Contains(" сохрани", StringComparison.Ordinal) ||
-              normalized.Contains(" запиши", StringComparison.Ordinal) ||
-              normalized.Contains(" добавь", StringComparison.Ordinal)))
+        var padded = $" {normalized} ";
+        if (!padded.Contains(" заметк", StringComparison.Ordinal) ||
+            !(padded.Contains(" сохрани", StringComparison.Ordinal) ||
+              padded.Contains(" запиши", StringComparison.Ordinal) ||
+              padded.Contains(" добавь", StringComparison.Ordinal)))
             return false;
 
         var match = Regex.Match(userText, @"заметку?[:\s]+(.+)$", RegexOptions.IgnoreCase);
@@ -1118,12 +1104,13 @@ public class AssistantOrchestratorService : IDisposable
 
     private static async Task<AssistantToolCommand?> TryBuildDeleteGoalCommandAsync(string normalized)
     {
-        if (!(normalized.Contains(" удали ", StringComparison.Ordinal) ||
-              normalized.Contains(" удалить ", StringComparison.Ordinal) ||
-              normalized.Contains(" убери ", StringComparison.Ordinal) ||
-              normalized.Contains(" убрать ", StringComparison.Ordinal)))
+        var padded = $" {normalized} ";
+        if (!(padded.Contains(" удали ", StringComparison.Ordinal) ||
+              padded.Contains(" удалить ", StringComparison.Ordinal) ||
+              padded.Contains(" убери ", StringComparison.Ordinal) ||
+              padded.Contains(" убрать ", StringComparison.Ordinal)))
             return null;
-        if (!(normalized.Contains(" цел", StringComparison.Ordinal) || normalized.Contains(" задач", StringComparison.Ordinal)))
+        if (!(padded.Contains(" цел", StringComparison.Ordinal) || padded.Contains(" задач", StringComparison.Ordinal)))
             return null;
 
         using var planner = new PlannerService();
@@ -1984,7 +1971,8 @@ public class AssistantOrchestratorService : IDisposable
 
     private sealed record CommandExecutionBatch(
         List<string> UserLines,
-        List<string> AgentLines);
+        List<string> AgentLines,
+        List<AssistantChatTurn> ToolTurns);
 
     private static string TrimForStorage(string? value, int maxChars = MaxStoredMessageChars)
     {

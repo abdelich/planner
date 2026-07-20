@@ -16,12 +16,17 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
     private int _lastConversationId = -1;
     private int _temporaryMessageId = -1;
 
+    private readonly VoiceRecorderService _voiceRecorder = new();
+    private readonly OpenAiAudioTranscriptionService _voiceTranscription = new();
+
     [ObservableProperty] private ObservableCollection<AssistantMessageItemViewModel> _messages = new();
     [ObservableProperty] private ObservableCollection<AssistantTaskItemViewModel> _tasks = new();
     [ObservableProperty] private ObservableCollection<AssistantReportItemViewModel> _reports = new();
     [ObservableProperty] private string _draftMessage = "";
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string _statusText = "";
+    [ObservableProperty] private bool _isVoiceRecording;
+    [ObservableProperty] private bool _isVoiceProcessing;
 
     [ObservableProperty] private string _apiKey = "";
     [ObservableProperty] private string _model = "gpt-4o-mini";
@@ -69,6 +74,7 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
     partial void OnIsBusyChanged(bool value)
     {
         SendMessageCommand.NotifyCanExecuteChanged();
+        ToggleVoiceRecordingCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand(CanExecute = nameof(CanSendMessage))]
@@ -122,6 +128,91 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
     private void InsertQuickCommand(string commandText)
     {
         DraftMessage = commandText ?? "";
+    }
+
+    public string VoiceButtonText => IsVoiceRecording ? "⏹" : "🎤";
+
+    partial void OnIsVoiceRecordingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(VoiceButtonText));
+        ToggleVoiceRecordingCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsVoiceProcessingChanged(bool value)
+    {
+        ToggleVoiceRecordingCommand.NotifyCanExecuteChanged();
+        SendMessageCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanToggleVoiceRecording() => !IsVoiceProcessing && !IsBusy;
+
+    [RelayCommand(CanExecute = nameof(CanToggleVoiceRecording))]
+    private async Task ToggleVoiceRecording()
+    {
+        if (IsVoiceRecording)
+        {
+            await StopVoiceRecordingAndSendAsync();
+            return;
+        }
+
+        try
+        {
+            var voiceSettings = _settings.GetVoiceSettings();
+            _voiceRecorder.Start(voiceSettings.MicrophoneDeviceNumber);
+            IsVoiceRecording = true;
+            StatusText = "Слушаю микрофон...";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Не удалось начать запись: " + ex.Message;
+        }
+    }
+
+    private async Task StopVoiceRecordingAndSendAsync()
+    {
+        IsVoiceProcessing = true;
+        var pathToCleanup = "";
+        try
+        {
+            pathToCleanup = await _voiceRecorder.StopAsync();
+            IsVoiceRecording = false;
+            StatusText = "Распознаю речь...";
+            var text = await _voiceTranscription.TranscribeAsync(pathToCleanup);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                StatusText = "Не получилось распознать речь. Попробуйте громче или ближе к микрофону.";
+                return;
+            }
+
+            DraftMessage = text.Trim();
+            StatusText = "";
+            if (SendMessageCommand.CanExecute(null))
+                await SendMessageCommand.ExecuteAsync(null);
+        }
+        catch (Exception ex)
+        {
+            StatusText = "Ошибка голосового ввода: " + ex.Message;
+        }
+        finally
+        {
+            IsVoiceRecording = false;
+            IsVoiceProcessing = false;
+            DeleteVoiceTempFile(pathToCleanup);
+        }
+    }
+
+    private static void DeleteVoiceTempFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            if (System.IO.File.Exists(path))
+                System.IO.File.Delete(path);
+        }
+        catch
+        {
+            // Temp file cleanup is best-effort.
+        }
     }
 
     [RelayCommand]
@@ -255,6 +346,8 @@ public partial class AssistantViewModel : ObservableObject, IDisposable
         AssistantConversationChangedNotificationService.Changed -= OnConversationChanged;
         _orchestrator?.Dispose();
         _orchestrator = null;
+        _voiceRecorder.Dispose();
+        _voiceTranscription.Dispose();
     }
 
     private void OnConversationChanged(int conversationId)

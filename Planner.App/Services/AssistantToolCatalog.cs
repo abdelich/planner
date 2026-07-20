@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace Planner.App.Services;
 
@@ -7,6 +9,8 @@ public static class AssistantToolCatalog
 {
     private static readonly IReadOnlyDictionary<string, AssistantToolSpec> Specs =
         BuildSpecs().ToDictionary(x => x.Name, StringComparer.OrdinalIgnoreCase);
+
+    public static IReadOnlyCollection<AssistantToolSpec> AllSpecs => (IReadOnlyCollection<AssistantToolSpec>)Specs.Values;
 
     public static bool IsKnown(string name) => Specs.ContainsKey(NormalizeName(name));
 
@@ -68,6 +72,110 @@ public static class AssistantToolCatalog
             sb.AppendLine($"  args: {argText}{required}");
         }
         return sb.ToString().Trim();
+    }
+
+    public static string BuildOpenAiToolsJson()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartArray();
+            foreach (var spec in Specs.Values.OrderBy(x => x.Name))
+                WriteToolSchema(writer, spec);
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static void WriteToolSchema(Utf8JsonWriter writer, AssistantToolSpec spec)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("type", "function");
+        writer.WriteStartObject("function");
+        writer.WriteString("name", spec.Name);
+        writer.WriteString("description", spec.Description + (spec.RequiresConfirmation ? " (Risky finance action; UI may prompt for user confirmation.)" : ""));
+
+        writer.WriteStartObject("parameters");
+        writer.WriteString("type", "object");
+        writer.WriteStartObject("properties");
+        foreach (var arg in spec.Args)
+        {
+            writer.WriteStartObject(arg.Name);
+            WriteArgSchema(writer, arg);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
+
+        var required = ComputeRequiredArgs(spec);
+        if (required.Count > 0)
+        {
+            writer.WriteStartArray("required");
+            foreach (var name in required)
+                writer.WriteStringValue(name);
+            writer.WriteEndArray();
+        }
+        writer.WriteBoolean("additionalProperties", false);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteArgSchema(Utf8JsonWriter writer, AssistantToolArgSpec arg)
+    {
+        switch (arg.Kind)
+        {
+            case "int":
+                writer.WriteString("type", "integer");
+                break;
+            case "decimal":
+                writer.WriteString("type", "number");
+                break;
+            case "bool":
+                writer.WriteString("type", "boolean");
+                break;
+            case "date":
+                writer.WriteString("type", "string");
+                writer.WriteString("description", "ISO date yyyy-MM-dd");
+                break;
+            case "time":
+                writer.WriteString("type", "string");
+                writer.WriteString("description", "Time HH:mm");
+                break;
+            case "enum":
+                writer.WriteString("type", "string");
+                if (arg.Values.Count > 0)
+                {
+                    writer.WriteStartArray("enum");
+                    foreach (var v in arg.Values)
+                        writer.WriteStringValue(v);
+                    writer.WriteEndArray();
+                }
+                break;
+            default:
+                writer.WriteString("type", "string");
+                if (arg.Values.Count > 0)
+                {
+                    writer.WriteStartArray("enum");
+                    foreach (var v in arg.Values)
+                        writer.WriteStringValue(v);
+                    writer.WriteEndArray();
+                }
+                break;
+        }
+    }
+
+    private static List<string> ComputeRequiredArgs(AssistantToolSpec spec)
+    {
+        var result = new List<string>();
+        foreach (var group in spec.RequiredAny)
+        {
+            if (group.Count == 1)
+            {
+                if (!result.Contains(group[0], StringComparer.OrdinalIgnoreCase))
+                    result.Add(group[0]);
+            }
+        }
+        return result;
     }
 
     private static string FormatArg(AssistantToolArgSpec arg)

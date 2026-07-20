@@ -107,6 +107,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBox Text="{Binding DraftMessage, UpdateSourceTrigger=PropertyChanged}"
                          Padding="10,8"
@@ -116,7 +117,16 @@
                         <KeyBinding Key="Enter" Command="{Binding SendMessageCommand}"/>
                     </TextBox.InputBindings>
                 </TextBox>
-                <Button Grid.Column="1" Content="Отправить" Command="{Binding SendMessageCommand}" Style="{StaticResource PrimaryButton}"/>
+                <Button Grid.Column="1"
+                        Content="{Binding VoiceButtonText}"
+                        Command="{Binding ToggleVoiceRecordingCommand}"
+                        Style="{StaticResource NavButton}"
+                        ToolTip="Записать речь и отправить в чат"
+                        FontFamily="Segoe UI Emoji"
+                        FontSize="18"
+                        MinWidth="48"
+                        Margin="0,0,8,0"/>
+                <Button Grid.Column="2" Content="Отправить" Command="{Binding SendMessageCommand}" Style="{StaticResource PrimaryButton}"/>
             </Grid>
         </Border>
     </Grid>

@@ -18,7 +18,10 @@ public record AssistantVoiceSettings(
 public record AssistantChatTurn(
     AssistantRole Role,
     string Content,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    IReadOnlyList<AssistantToolCommand>? ToolCalls = null,
+    string? ToolCallId = null,
+    string? ToolName = null);
 
 public record AssistantLlmResponse(
     string ReplyText,
@@ -28,6 +31,8 @@ public class AssistantToolCommand
 {
     public string Name { get; set; } = "";
     public Dictionary<string, string> Args { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public string? ToolCallId { get; set; }
+    public string? RawArgumentsJson { get; set; }
 }
 
 public record AssistantToolResult(

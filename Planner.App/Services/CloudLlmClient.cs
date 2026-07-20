@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -33,13 +34,7 @@ public class CloudLlmClient : IDisposable
             ? "https://api.openai.com/v1/chat/completions"
             : settings.Endpoint.Trim();
 
-        var payload = new
-        {
-            model = string.IsNullOrWhiteSpace(settings.Model) ? "gpt-4o-mini" : settings.Model,
-            temperature = 0.2,
-            max_tokens = MaxOutputTokens,
-            messages = BuildMessages(systemPrompt, turns)
-        };
+        var requestJson = BuildRequestJson(settings, systemPrompt, turns);
 
         Exception? last = null;
         for (var attempt = 0; attempt < 3; attempt++)
@@ -48,7 +43,7 @@ public class CloudLlmClient : IDisposable
             {
                 using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey.Trim());
-                req.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                req.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
 
                 using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
                 if (res.Content.Headers.ContentLength is > MaxResponseBodyChars)
@@ -57,15 +52,7 @@ public class CloudLlmClient : IDisposable
                 if (body.Length > MaxResponseBodyChars)
                     throw new InvalidOperationException("LLM response is too large.");
                 if (res.IsSuccessStatusCode)
-                {
-                    using var doc = JsonDocument.Parse(body);
-                    var content = doc.RootElement
-                        .GetProperty("choices")[0]
-                        .GetProperty("message")
-                        .GetProperty("content")
-                        .GetString() ?? "";
-                    return ParseAssistantResponse(content);
-                }
+                    return ParseAssistantResponse(body);
 
                 var code = (int)res.StatusCode;
                 if ((code == 429 || code is >= 500 and <= 599) && attempt < 2)
@@ -86,106 +73,158 @@ public class CloudLlmClient : IDisposable
         throw last ?? new InvalidOperationException("LLM request failed after retries.");
     }
 
-    private static object[] BuildMessages(string systemPrompt, IReadOnlyList<AssistantChatTurn> turns)
+    private static string BuildRequestJson(
+        AssistantLlmSettings settings,
+        string systemPrompt,
+        IReadOnlyList<AssistantChatTurn> turns)
     {
-        var list = new List<object> { new { role = "system", content = TrimContent(systemPrompt, MaxSystemPromptChars) } };
-        foreach (var t in turns)
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
         {
-            list.Add(new
-            {
-                role = t.Role switch
-                {
-                    AssistantRole.User => "user",
-                    AssistantRole.System => "system",
-                    _ => "assistant"
-                },
-                content = TrimContent(t.Content, MaxTurnContentChars)
-            });
+            writer.WriteStartObject();
+            writer.WriteString("model", string.IsNullOrWhiteSpace(settings.Model) ? "gpt-4o-mini" : settings.Model);
+            writer.WriteNumber("temperature", 0.2);
+            writer.WriteNumber("max_tokens", MaxOutputTokens);
+            writer.WriteString("tool_choice", "auto");
+            writer.WritePropertyName("tools");
+            using (var toolsDoc = JsonDocument.Parse(AssistantToolCatalog.BuildOpenAiToolsJson()))
+                toolsDoc.RootElement.WriteTo(writer);
+
+            writer.WritePropertyName("messages");
+            writer.WriteStartArray();
+            WriteSystemMessage(writer, systemPrompt);
+            foreach (var turn in turns)
+                WriteTurnMessage(writer, turn);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
         }
-        return list.ToArray();
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private static AssistantLlmResponse ParseAssistantResponse(string content)
+    private static void WriteSystemMessage(Utf8JsonWriter writer, string systemPrompt)
     {
-        if (string.IsNullOrWhiteSpace(content))
+        writer.WriteStartObject();
+        writer.WriteString("role", "system");
+        writer.WriteString("content", TrimContent(systemPrompt, MaxSystemPromptChars));
+        writer.WriteEndObject();
+    }
+
+    private static void WriteTurnMessage(Utf8JsonWriter writer, AssistantChatTurn turn)
+    {
+        writer.WriteStartObject();
+        switch (turn.Role)
+        {
+            case AssistantRole.User:
+                writer.WriteString("role", "user");
+                writer.WriteString("content", TrimContent(turn.Content, MaxTurnContentChars));
+                break;
+            case AssistantRole.System:
+                writer.WriteString("role", "system");
+                writer.WriteString("content", TrimContent(turn.Content, MaxTurnContentChars));
+                break;
+            case AssistantRole.Tool:
+                writer.WriteString("role", "tool");
+                writer.WriteString("tool_call_id", turn.ToolCallId ?? "");
+                writer.WriteString("content", TrimContent(turn.Content, MaxTurnContentChars));
+                break;
+            default:
+                writer.WriteString("role", "assistant");
+                writer.WriteString("content", TrimContent(turn.Content, MaxTurnContentChars));
+                if (turn.ToolCalls != null && turn.ToolCalls.Count > 0)
+                {
+                    writer.WriteStartArray("tool_calls");
+                    foreach (var call in turn.ToolCalls)
+                    {
+                        writer.WriteStartObject();
+                        writer.WriteString("id", call.ToolCallId ?? "");
+                        writer.WriteString("type", "function");
+                        writer.WriteStartObject("function");
+                        writer.WriteString("name", call.Name);
+                        writer.WriteString("arguments", string.IsNullOrEmpty(call.RawArgumentsJson)
+                            ? SerializeArgs(call.Args)
+                            : call.RawArgumentsJson);
+                        writer.WriteEndObject();
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray();
+                }
+                break;
+        }
+        writer.WriteEndObject();
+    }
+
+    private static string SerializeArgs(Dictionary<string, string> args)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            foreach (var kv in args)
+                writer.WriteString(kv.Key, kv.Value);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static AssistantLlmResponse ParseAssistantResponse(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
             return new AssistantLlmResponse("Пустой ответ модели. Попробуйте еще раз.", Array.Empty<AssistantToolCommand>());
 
-        // Expected optional JSON envelope:
-        // {"reply":"...","commands":[{"name":"create_goal","args":{"title":"...","targetCount":"1"}}]}
-        var original = content.Trim();
-        var trimmed = ExtractJsonEnvelope(original);
-        if (trimmed.Length > MaxAssistantReplyChars)
-            trimmed = TrimContent(trimmed, MaxAssistantReplyChars);
-        if (!trimmed.StartsWith("{", StringComparison.Ordinal))
-            return new AssistantLlmResponse(trimmed, Array.Empty<AssistantToolCommand>());
+        using var doc = JsonDocument.Parse(body);
+        if (!doc.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+            return new AssistantLlmResponse("Пустой ответ модели.", Array.Empty<AssistantToolCommand>());
 
+        var message = choices[0].GetProperty("message");
+        var reply = message.TryGetProperty("content", out var contentNode) && contentNode.ValueKind == JsonValueKind.String
+            ? contentNode.GetString() ?? ""
+            : "";
+
+        var commands = new List<AssistantToolCommand>();
+        if (message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var call in toolCalls.EnumerateArray())
+            {
+                if (!call.TryGetProperty("function", out var function))
+                    continue;
+                var name = function.TryGetProperty("name", out var nameNode) ? nameNode.GetString() ?? "" : "";
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+                var argsJson = function.TryGetProperty("arguments", out var argsNode) && argsNode.ValueKind == JsonValueKind.String
+                    ? argsNode.GetString() ?? "{}"
+                    : "{}";
+                var id = call.TryGetProperty("id", out var idNode) ? idNode.GetString() ?? "" : "";
+
+                var command = new AssistantToolCommand
+                {
+                    Name = name.Trim(),
+                    ToolCallId = id,
+                    RawArgumentsJson = argsJson
+                };
+                PopulateArgsFromJson(command, argsJson);
+                commands.Add(command);
+            }
+        }
+
+        return new AssistantLlmResponse(TrimContent(reply, MaxAssistantReplyChars), commands);
+    }
+
+    private static void PopulateArgsFromJson(AssistantToolCommand command, string argsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argsJson))
+            return;
         try
         {
-            using var doc = JsonDocument.Parse(trimmed);
-            var commands = new List<AssistantToolCommand>();
-            if (doc.RootElement.TryGetProperty("commands", out var commandsNode) && commandsNode.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var cmdNode in commandsNode.EnumerateArray())
-                {
-                    if (TryParseCommandObject(cmdNode, out var cmd))
-                        commands.Add(cmd);
-                }
-            }
-
-            if (commands.Count == 0 && TryParseCommandObject(doc.RootElement, out var singleCommand))
-                commands.Add(singleCommand);
-
-            var reply = doc.RootElement.TryGetProperty("reply", out var replyNode)
-                ? replyNode.GetString() ?? ""
-                : commands.Count > 0
-                    ? "Выполняю действие."
-                    : trimmed;
-            reply = TrimContent(reply, MaxAssistantReplyChars);
-            return new AssistantLlmResponse(reply, commands);
+            using var doc = JsonDocument.Parse(argsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return;
+            foreach (var property in doc.RootElement.EnumerateObject())
+                command.Args[property.Name] = JsonValueToString(property.Value);
         }
         catch
         {
-            return new AssistantLlmResponse(TrimContent(original, MaxAssistantReplyChars), Array.Empty<AssistantToolCommand>());
+            // Malformed arguments — leave args empty; validator will reject.
         }
-    }
-
-    private static bool TryParseCommandObject(JsonElement node, out AssistantToolCommand command)
-    {
-        command = new AssistantToolCommand();
-        if (node.ValueKind != JsonValueKind.Object)
-            return false;
-
-        string name = "";
-        if (node.TryGetProperty("name", out var nameNode))
-            name = nameNode.GetString() ?? "";
-        else if (node.TryGetProperty("command", out var commandNode))
-            name = commandNode.GetString() ?? "";
-        else if (node.TryGetProperty("tool", out var toolNode))
-            name = toolNode.GetString() ?? "";
-
-        JsonElement argsNode = node;
-        if (node.TryGetProperty("args", out var explicitArgs) && explicitArgs.ValueKind == JsonValueKind.Object)
-            argsNode = explicitArgs;
-        else if (string.IsNullOrWhiteSpace(name) &&
-                 node.TryGetProperty("amount", out _) &&
-                 node.TryGetProperty("categoryId", out _) &&
-                 node.TryGetProperty("savingsEntryId", out _))
-        {
-            name = "create_transaction";
-        }
-
-        if (string.IsNullOrWhiteSpace(name) || !AssistantToolCatalog.IsKnown(name))
-            return false;
-
-        command.Name = name.Trim();
-        foreach (var p in argsNode.EnumerateObject())
-        {
-            if (p.NameEquals("name") || p.NameEquals("command") || p.NameEquals("tool") || p.NameEquals("reply") || p.NameEquals("commands"))
-                continue;
-            command.Args[p.Name] = JsonValueToString(p.Value);
-        }
-
-        return command.Args.Count > 0 || name.StartsWith("inspect_", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string JsonValueToString(JsonElement value)
@@ -196,29 +235,9 @@ public class CloudLlmClient : IDisposable
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
             JsonValueKind.Number => value.ToString(),
+            JsonValueKind.Null => "",
             _ => value.ToString()
         };
-    }
-
-    private static string ExtractJsonEnvelope(string content)
-    {
-        var trimmed = content.Trim();
-        if (trimmed.StartsWith("```", StringComparison.Ordinal))
-        {
-            var firstLineEnd = trimmed.IndexOf('\n');
-            var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
-            if (firstLineEnd >= 0 && lastFence > firstLineEnd)
-                trimmed = trimmed[(firstLineEnd + 1)..lastFence].Trim();
-        }
-
-        if (trimmed.StartsWith("{", StringComparison.Ordinal))
-            return trimmed;
-
-        var start = trimmed.IndexOf('{');
-        var end = trimmed.LastIndexOf('}');
-        return start >= 0 && end > start
-            ? trimmed[start..(end + 1)].Trim()
-            : trimmed;
     }
 
     private static string TrimContent(string? value, int maxChars)
