@@ -38,12 +38,7 @@ Output: `Planner.App\bin\Release\net8.0-windows\win-x64\publish\Planner.App.exe`
 
 An [Inno Setup](https://jrsoftware.org/isdl.php) script is included at `installer/Planner.iss`. It packages the published app into a proper Windows installer with a Start Menu entry, optional desktop shortcut, optional "run at startup" option, and an uninstaller.
 
-```bash
-cd Planner.App
-dotnet publish -c Release
-```
-
-Then, with Inno Setup installed, either open `installer/Planner.iss` in the Inno Setup Compiler and click **Build → Compile**, or from the command line:
+First, publish the app as above (`dotnet publish -c Release` from `Planner.App`). Then, with Inno Setup installed, either open `installer/Planner.iss` in the Inno Setup Compiler and click **Build → Compile**, or from the command line:
 
 ```bash
 ISCC.exe installer\Planner.iss
