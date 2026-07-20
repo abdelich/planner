@@ -66,3 +66,6 @@ Desktop.ini
 
 # Planner local assistant settings (if ever copied into repo)
 assistant.settings.json
+
+# Inno Setup installer output
+installer/Output/

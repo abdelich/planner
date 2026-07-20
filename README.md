@@ -34,6 +34,23 @@ dotnet publish -c Release
 
 Output: `Planner.App\bin\Release\net8.0-windows\win-x64\publish\Planner.App.exe`. Copy the whole `publish` folder where you want and run the exe. You can create a shortcut (right‑click exe → Create shortcut) and pin it to the taskbar; the app icon (orange circle with checkmark) will show there.
 
+## Build an installer (Setup.exe)
+
+An [Inno Setup](https://jrsoftware.org/isdl.php) script is included at `installer/Planner.iss`. It packages the published app into a proper Windows installer with a Start Menu entry, optional desktop shortcut, optional "run at startup" option, and an uninstaller.
+
+```bash
+cd Planner.App
+dotnet publish -c Release
+```
+
+Then, with Inno Setup installed, either open `installer/Planner.iss` in the Inno Setup Compiler and click **Build → Compile**, or from the command line:
+
+```bash
+ISCC.exe installer\Planner.iss
+```
+
+Output: `installer\Output\PlannerSetup-<version>.exe`. It installs per-user by default (no admin rights needed) but can install for all users too — see the comments in the `.iss` file. Uninstalling does not delete your data in `%LocalAppData%\Planner`.
+
 ## Start with Windows
 
 In **Settings → Launch with Windows**. It registers the app in the Windows startup.
