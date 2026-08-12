@@ -25,6 +25,8 @@ public static class FinanceMigration
                     CategoryId INTEGER NOT NULL,
                     Note TEXT,
                     CreatedAt TEXT NOT NULL,
+                    SavingsEntryId INTEGER NULL,
+                    SavingsDelta REAL NOT NULL DEFAULT 0,
                     FOREIGN KEY (CategoryId) REFERENCES FinanceCategories(Id)
                 );");
             db.Database.ExecuteSqlRaw(@"
@@ -47,10 +49,45 @@ public static class FinanceMigration
             AddSavingsCategoryIdColumnIfNeeded(db);
             EnsureSavingsMonthlySnapshotsTable(db);
             AddCurrencyColumnIfNeeded(db);
+            AddTransactionSavingsLinkColumnsIfNeeded(db);
         }
         catch
         {
         }
+    }
+
+    /// <summary>
+    /// Привязка операции к счету сбережений. У операций, созданных до этой миграции,
+    /// счет остается неизвестным (NULL), поэтому их удаление балансы не трогает.
+    /// </summary>
+    private static void AddTransactionSavingsLinkColumnsIfNeeded(PlannerDbContext db)
+    {
+        try
+        {
+            var columns = GetColumns(db, "Transactions");
+            if (columns.Count == 0) return;
+            if (!columns.Contains("SavingsEntryId", StringComparer.OrdinalIgnoreCase))
+                db.Database.ExecuteSqlRaw("ALTER TABLE Transactions ADD COLUMN SavingsEntryId INTEGER NULL REFERENCES SavingsEntries(Id);");
+            if (!columns.Contains("SavingsDelta", StringComparer.OrdinalIgnoreCase))
+                db.Database.ExecuteSqlRaw("ALTER TABLE Transactions ADD COLUMN SavingsDelta REAL NOT NULL DEFAULT 0;");
+        }
+        catch
+        {
+        }
+    }
+
+    private static List<string> GetColumns(PlannerDbContext db, string table)
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            conn.Open();
+        var columns = new List<string>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({table});";
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            columns.Add(r.GetString(1));
+        return columns;
     }
 
     private static void AddCurrencyColumnIfNeeded(PlannerDbContext db)

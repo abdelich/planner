@@ -118,6 +118,38 @@ public class PlannerService : IDisposable
             .SumAsync(c => c.Count);
     }
 
+    /// <summary>
+    /// Отметки бессрочных целей считаются за все время, а не за период — от этого зависит,
+    /// показывать ли цель дальше. Возвращает состояние только для целей с <see cref="Goal.IsOpenEnded"/>.
+    /// </summary>
+    public async Task<OpenEndedGoalStateMap> GetOpenEndedGoalStatesAsync(IEnumerable<Goal> goals)
+    {
+        var openEnded = goals
+            .Where(g => g.IsOpenEnded)
+            .GroupBy(g => g.Id)
+            .ToDictionary(g => g.Key, g => Math.Max(1, g.First().TargetCount));
+        if (openEnded.Count == 0)
+            return OpenEndedGoalStateMap.Empty;
+
+        var ids = openEnded.Keys.ToList();
+        var totals = await _db.GoalCompletions
+            .AsNoTracking()
+            .Where(c => ids.Contains(c.GoalId))
+            .GroupBy(c => c.GoalId)
+            .Select(g => new { GoalId = g.Key, Total = g.Sum(c => c.Count), Last = g.Max(c => c.Date) })
+            .ToListAsync();
+        var byGoal = totals.ToDictionary(x => x.GoalId);
+
+        var states = new Dictionary<int, OpenEndedGoalState>();
+        foreach (var (goalId, target) in openEnded)
+        {
+            states[goalId] = byGoal.TryGetValue(goalId, out var row)
+                ? new OpenEndedGoalState(row.Total, target, row.Last)
+                : new OpenEndedGoalState(0, target, null);
+        }
+        return new OpenEndedGoalStateMap(states);
+    }
+
     public async Task<bool> IsGoalCompletedForDateAsync(int goalId, DateTime date)
     {
         return await _db.GoalCompletions
@@ -395,10 +427,26 @@ public class PlannerService : IDisposable
         return list;
     }
 
-    public async Task<Transaction> AddTransactionAsync(Transaction transaction)
+    /// <param name="savingsEntryId">Счет, по которому проходит операция. null — операция без привязки к счету.</param>
+    /// <param name="savingsDelta">Изменение баланса счета в валюте счета, со знаком (расход — отрицательное).</param>
+    public async Task<Transaction> AddTransactionAsync(Transaction transaction, int? savingsEntryId = null, decimal savingsDelta = 0)
     {
         transaction.CreatedAt = DateTime.UtcNow;
         transaction.Category = null!;
+        transaction.SavingsEntryId = null;
+        transaction.SavingsDelta = 0;
+
+        if (savingsEntryId.HasValue)
+        {
+            var entry = await _db.SavingsEntries.FindAsync(savingsEntryId.Value);
+            if (entry != null)
+            {
+                entry.Balance += savingsDelta;
+                transaction.SavingsEntryId = entry.Id;
+                transaction.SavingsDelta = savingsDelta;
+            }
+        }
+
         _db.Transactions.Add(transaction);
         await SaveChangesAndClearAsync();
         return transaction;
@@ -412,6 +460,10 @@ public class PlannerService : IDisposable
             .FirstOrDefaultAsync(t => t.Id == transactionId);
     }
 
+    /// <param name="newSavingsDelta">
+    /// Пересчитанное изменение баланса в валюте привязанного счета. Если задано, разница
+    /// с ранее примененной дельтой доначисляется на счет, чтобы баланс остался согласованным.
+    /// </param>
     public async Task<bool> UpdateTransactionAsync(
         int transactionId,
         decimal? amount = null,
@@ -419,11 +471,22 @@ public class PlannerService : IDisposable
         DateTime? date = null,
         string? currency = null,
         string? note = null,
-        bool updateNote = false)
+        bool updateNote = false,
+        decimal? newSavingsDelta = null)
     {
         var transaction = await _db.Transactions.FindAsync(transactionId);
         if (transaction == null)
             return false;
+
+        if (newSavingsDelta.HasValue && transaction.SavingsEntryId is { } linkedEntryId)
+        {
+            var entry = await _db.SavingsEntries.FindAsync(linkedEntryId);
+            if (entry != null)
+            {
+                entry.Balance += newSavingsDelta.Value - transaction.SavingsDelta;
+                transaction.SavingsDelta = newSavingsDelta.Value;
+            }
+        }
 
         if (amount.HasValue)
             transaction.Amount = amount.Value;
@@ -448,11 +511,18 @@ public class PlannerService : IDisposable
     public async Task DeleteTransactionByIdAsync(int transactionId)
     {
         var t = await _db.Transactions.FindAsync(transactionId);
-        if (t != null)
+        if (t == null)
+            return;
+
+        if (t.SavingsEntryId is { } savingsEntryId && t.SavingsDelta != 0)
         {
-            _db.Transactions.Remove(t);
-            await SaveChangesAndClearAsync();
+            var entry = await _db.SavingsEntries.FindAsync(savingsEntryId);
+            if (entry != null)
+                entry.Balance -= t.SavingsDelta;
         }
+
+        _db.Transactions.Remove(t);
+        await SaveChangesAndClearAsync();
     }
 
     public async Task<FinanceMonthStats> GetFinanceMonthStatsAsync(int year, int month, string? currencyFilter = null, StatsFilterType statsFilter = StatsFilterType.All)
@@ -554,14 +624,6 @@ public class PlannerService : IDisposable
         }
     }
 
-    public async Task AddDeltaToSavingsBalanceAsync(int savingsEntryId, decimal delta)
-    {
-        var e = await _db.SavingsEntries.FindAsync(savingsEntryId);
-        if (e == null) return;
-        e.Balance += delta;
-        await SaveChangesAndClearAsync();
-    }
-
     public async Task TransferBetweenSavingsAsync(int fromSavingsEntryId, decimal fromDelta, int toSavingsEntryId, decimal toDelta)
     {
         if (fromSavingsEntryId == toSavingsEntryId) return;
@@ -658,6 +720,41 @@ public class PlannerService : IDisposable
     {
         _db.Dispose();
     }
+}
+
+/// <summary>Состояние бессрочных целей: сколько отметок набрано за все время и когда была последняя.</summary>
+public sealed class OpenEndedGoalStateMap
+{
+    public static readonly OpenEndedGoalStateMap Empty = new(new Dictionary<int, OpenEndedGoalState>());
+
+    private readonly IReadOnlyDictionary<int, OpenEndedGoalState> _states;
+
+    public OpenEndedGoalStateMap(IReadOnlyDictionary<int, OpenEndedGoalState> states) => _states = states;
+
+    public OpenEndedGoalState? Find(int goalId) => _states.TryGetValue(goalId, out var state) ? state : null;
+
+    /// <summary>
+    /// Невыполненная бессрочная цель видна в каждом периоде начиная с даты создания.
+    /// После выполнения она остается только в том периоде, где ее закрыли.
+    /// </summary>
+    public bool IsVisibleIn(Goal goal, DateTime periodStart, DateTime periodEnd)
+    {
+        var anchor = (goal.StartDate ?? goal.CreatedAt).Date;
+        if (anchor > periodEnd.Date)
+            return false;
+
+        var state = Find(goal.Id);
+        if (state is not { IsComplete: true })
+            return true;
+        return state.LastCompletionDate is { } completedOn &&
+               completedOn.Date >= periodStart.Date &&
+               completedOn.Date <= periodEnd.Date;
+    }
+}
+
+public sealed record OpenEndedGoalState(int TotalCount, int Target, DateTime? LastCompletionDate)
+{
+    public bool IsComplete => TotalCount >= Target;
 }
 
 public enum StatsFilterType { All, IncomeOnly, ExpenseOnly }

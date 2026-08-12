@@ -14,6 +14,7 @@ public partial class GoalsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(DisplayPeriodText))]
     [NotifyPropertyChangedFor(nameof(ShowPeriodTypeAsLabel))]
     [NotifyPropertyChangedFor(nameof(ShowPeriodTypeComboBox))]
+    [NotifyPropertyChangedFor(nameof(ShowPeriodTypeSection))]
     [NotifyPropertyChangedFor(nameof(ShowPeriodNotes))]
     private int _selectedTabIndex;
 
@@ -66,20 +67,30 @@ public partial class GoalsViewModel : ObservableObject
         return char.ToUpper(dayName[0], Ru) + dayName[1..] + ", " + dateStr;
     }
 
-    public bool ShowPeriodTypeAsLabel => SelectedTabIndex == 0 && NewGoalCategory == GoalCategory.Period;
-    public bool ShowPeriodTypeComboBox => SelectedTabIndex == 1 && NewGoalCategory == GoalCategory.Period;
+    // У бессрочной цели период не выбирается — она висит и в дне, и в неделе, и в месяце.
+    public bool ShowPeriodTypeAsLabel => SelectedTabIndex == 0 && NewGoalCategory == GoalCategory.Period && !NewGoalIsOpenEnded;
+    public bool ShowPeriodTypeComboBox => SelectedTabIndex == 1 && NewGoalCategory == GoalCategory.Period && !NewGoalIsOpenEnded;
+    public bool ShowPeriodTypeSection => ShowPeriodTypeAsLabel || ShowPeriodTypeComboBox;
     public string PeriodTypeLabel => NewGoalType switch { GoalType.Daily => "Цель на день", GoalType.Weekly => "Цель на неделю", GoalType.Monthly => "Цель на месяц", _ => "Период" };
+    public string TargetCountLabel => NewGoalIsOpenEnded ? "Сколько отметок закрывают цель" : "Цель в периоде (раз)";
 
     [ObservableProperty] private bool _isAddPanelOpen;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPeriodTypeAsLabel))]
     [NotifyPropertyChangedFor(nameof(ShowPeriodTypeComboBox))]
+    [NotifyPropertyChangedFor(nameof(ShowPeriodTypeSection))]
     private GoalCategory _newGoalCategory = GoalCategory.Period;
     [ObservableProperty] private string _newGoalTitle = string.Empty;
     [ObservableProperty] private string _newGoalDescription = string.Empty;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PeriodTypeLabel))]
     private GoalType _newGoalType = GoalType.Daily;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowPeriodTypeAsLabel))]
+    [NotifyPropertyChangedFor(nameof(ShowPeriodTypeComboBox))]
+    [NotifyPropertyChangedFor(nameof(ShowPeriodTypeSection))]
+    [NotifyPropertyChangedFor(nameof(TargetCountLabel))]
+    private bool _newGoalIsOpenEnded;
     [ObservableProperty] private string _newGoalTargetCount = "1";
     [ObservableProperty] private RecurrenceKind _newGoalRecurrenceKind = RecurrenceKind.EveryDay;
     [ObservableProperty] private string _newGoalIntervalDays = "1";
@@ -121,6 +132,7 @@ public partial class GoalsViewModel : ObservableObject
     private async Task LoadPeriodGoalsAsync()
     {
         var list = await _service.GetPeriodGoalsAsync();
+        var openEnded = await _service.GetOpenEndedGoalStatesAsync(list);
         var dayItems = new List<GoalItemViewModel>();
         var weekItems = new List<GoalItemViewModel>();
         var monthItems = new List<GoalItemViewModel>();
@@ -134,6 +146,18 @@ public partial class GoalsViewModel : ObservableObject
 
         foreach (var g in list)
         {
+            // Бессрочная цель не привязана к типу периода — она висит и в дне, и в неделе, и в месяце.
+            if (g.IsOpenEnded)
+            {
+                if (openEnded.IsVisibleIn(g, dayDate, dayDate))
+                    dayItems.Add(BuildOpenEndedItem(g, openEnded, "день", dayDate, dayDate, today));
+                if (openEnded.IsVisibleIn(g, weekStart, weekEnd))
+                    weekItems.Add(BuildOpenEndedItem(g, openEnded, "неделя", weekStart, weekEnd, today));
+                if (openEnded.IsVisibleIn(g, monthStart, monthEnd))
+                    monthItems.Add(BuildOpenEndedItem(g, openEnded, "месяц", monthStart, monthEnd, today));
+                continue;
+            }
+
             if (g.Type == GoalType.Daily)
             {
                 if (!MatchesDailyPeriod(g, dayDate))
@@ -203,6 +227,33 @@ public partial class GoalsViewModel : ObservableObject
         });
     }
 
+    /// <summary>
+    /// Бессрочная цель показывается в каждом периоде одинаково: прогресс за все время,
+    /// отметка ставится сегодняшним днем (а снимается — днем, когда цель закрыли).
+    /// </summary>
+    private GoalItemViewModel BuildOpenEndedItem(
+        Goal goal,
+        OpenEndedGoalStateMap openEnded,
+        string scopeLabel,
+        DateTime periodStart,
+        DateTime periodEnd,
+        DateTime today)
+    {
+        var state = openEnded.Find(goal.Id);
+        var target = state?.Target ?? Math.Max(1, goal.TargetCount);
+        var current = state?.TotalCount ?? 0;
+        var markDate = state is { IsComplete: true, LastCompletionDate: { } completedOn }
+            ? completedOn.Date
+            : today;
+
+        return new GoalItemViewModel(goal, (current, target, scopeLabel), FrequencyText(goal), _service, () => _ = LoadAsync())
+        {
+            PeriodDate = markDate,
+            IsPastPeriod = periodEnd.Date < today,
+            IsCompletedToday = state is { IsComplete: true }
+        };
+    }
+
     private async Task<(int Current, int Target, string Label)> GetPeriodProgressForDateAsync(Goal g, DateTime from, DateTime to)
     {
         if (g.Category != GoalCategory.Period) return (0, 1, "");
@@ -234,6 +285,9 @@ public partial class GoalsViewModel : ObservableObject
         var today = DateTime.Today;
         var items = new List<GoalItemViewModel>();
         var periodList = await _service.GetPeriodGoalsAsync();
+        var openEnded = await _service.GetOpenEndedGoalStatesAsync(periodList);
+        foreach (var g in periodList.Where(g => g.IsOpenEnded && openEnded.IsVisibleIn(g, today, today)))
+            items.Add(BuildOpenEndedItem(g, openEnded, "сегодня", today, today, today));
         foreach (var g in periodList.Where(g => g.Type == GoalType.Daily && MatchesDailyPeriod(g, today)))
         {
             var completed = await _service.IsGoalCompletedForDateAsync(g.Id, today);
@@ -258,7 +312,9 @@ public partial class GoalsViewModel : ObservableObject
     private static string FrequencyText(Goal g)
     {
         if (g.Category == GoalCategory.Period)
-            return g.Type switch { GoalType.Daily => "день", GoalType.Weekly => "неделя", GoalType.Monthly => "месяц", _ => "" };
+            return g.IsOpenEnded
+                ? "бессрочная"
+                : g.Type switch { GoalType.Daily => "день", GoalType.Weekly => "неделя", GoalType.Monthly => "месяц", _ => "" };
         return g.RecurrenceKind switch
         {
             RecurrenceKind.EveryDay => "каждый день",
@@ -337,15 +393,16 @@ public partial class GoalsViewModel : ObservableObject
 
     private static DateTime PeriodAnchor(Goal g) => (g.StartDate ?? g.CreatedAt).Date;
 
+    // Бессрочные цели сюда не попадают: их видимость считает OpenEndedGoalStateMap.IsVisibleIn.
     private static bool MatchesDailyPeriod(Goal g, DateTime dayDate) =>
-        g.Category == GoalCategory.Period && g.Type == GoalType.Daily && PeriodAnchor(g) == dayDate.Date;
+        g.Category == GoalCategory.Period && !g.IsOpenEnded && g.Type == GoalType.Daily && PeriodAnchor(g) == dayDate.Date;
 
     private static bool MatchesWeeklyPeriod(Goal g, DateTime weekStart) =>
-        g.Category == GoalCategory.Period && g.Type == GoalType.Weekly &&
+        g.Category == GoalCategory.Period && !g.IsOpenEnded && g.Type == GoalType.Weekly &&
         GetWeekStart(PeriodAnchor(g)) == weekStart.Date;
 
     private static bool MatchesMonthlyPeriod(Goal g, DateTime monthStart) =>
-        g.Category == GoalCategory.Period && g.Type == GoalType.Monthly &&
+        g.Category == GoalCategory.Period && !g.IsOpenEnded && g.Type == GoalType.Monthly &&
         PeriodAnchor(g).Year == monthStart.Year && PeriodAnchor(g).Month == monthStart.Month;
 
     private (NotePeriodKind kind, DateTime periodStart) GetCurrentNotePeriod() =>
@@ -484,16 +541,21 @@ public partial class GoalsViewModel : ObservableObject
                 return;
         }
 
+        var isOpenEnded = NewGoalCategory == GoalCategory.Period && NewGoalIsOpenEnded;
+
         DateTime? periodStart = null;
         if (NewGoalCategory == GoalCategory.Period)
         {
-            periodStart = NewGoalType switch
-            {
-                GoalType.Daily => SelectedPeriodDate.Date,
-                GoalType.Weekly => GetWeekStart(SelectedPeriodDate),
-                GoalType.Monthly => new DateTime(SelectedPeriodDate.Year, SelectedPeriodDate.Month, 1),
-                _ => SelectedPeriodDate.Date
-            };
+            // Бессрочная цель стартует с выбранного дня и дальше висит во всех периодах.
+            periodStart = isOpenEnded
+                ? SelectedPeriodDate.Date
+                : NewGoalType switch
+                {
+                    GoalType.Daily => SelectedPeriodDate.Date,
+                    GoalType.Weekly => GetWeekStart(SelectedPeriodDate),
+                    GoalType.Monthly => new DateTime(SelectedPeriodDate.Year, SelectedPeriodDate.Month, 1),
+                    _ => SelectedPeriodDate.Date
+                };
         }
 
         var goal = new Goal
@@ -502,6 +564,7 @@ public partial class GoalsViewModel : ObservableObject
             Title = NewGoalTitle.Trim(),
             Description = string.IsNullOrWhiteSpace(NewGoalDescription) ? null : NewGoalDescription.Trim(),
             Type = NewGoalType,
+            IsOpenEnded = isOpenEnded,
             RecurrenceKind = NewGoalRecurrenceKind,
             IntervalDays = intervalDays,
             RecurrenceDays = recurrenceDays,
@@ -532,6 +595,7 @@ public partial class GoalsViewModel : ObservableObject
     {
         NewGoalTitle = string.Empty;
         NewGoalDescription = string.Empty;
+        NewGoalIsOpenEnded = false;
         NewGoalTargetCount = "1";
         NewGoalIntervalDays = "1";
         NewGoalRecurrenceDays = 0;

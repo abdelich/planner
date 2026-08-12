@@ -31,6 +31,7 @@ public static class GoalMigration
             AddColumn("Category", "INTEGER NOT NULL DEFAULT 0");
             AddColumn("RecurrenceKind", "INTEGER NOT NULL DEFAULT 0");
             AddColumn("IntervalDays", "INTEGER NOT NULL DEFAULT 1");
+            AddColumn("IsOpenEnded", "INTEGER NOT NULL DEFAULT 0");
         }
         catch
         {

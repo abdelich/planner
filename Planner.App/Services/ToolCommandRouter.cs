@@ -64,12 +64,15 @@ public class ToolCommandRouter : IDisposable
     {
         if (!args.TryGetValue("title", out var title) || string.IsNullOrWhiteSpace(title))
             return new AssistantToolResult(false, "Для цели нужен title.");
+        var category = ParseGoalCategory(args);
         var goal = new Goal
         {
             Title = title.Trim(),
             Description = args.TryGetValue("description", out var desc) ? desc : null,
-            Category = ParseGoalCategory(args),
+            Category = category,
             Type = ParseGoalType(args),
+            // Бессрочность имеет смысл только для периодных целей: регулярные и так повторяются.
+            IsOpenEnded = category == GoalCategory.Period && ParseBool(args, "isOpenEnded", false),
             RecurrenceKind = ParseRecurrenceKind(args),
             IntervalDays = ParseInt(args, "intervalDays", 1, 1, 365),
             RecurrenceDays = ParseWeekdayMask(args),
@@ -108,11 +111,15 @@ public class ToolCommandRouter : IDisposable
             goal.IntervalDays = ParseInt(args, "intervalDays", goal.IntervalDays <= 0 ? 1 : goal.IntervalDays, 1, 365);
         if (args.ContainsKey("weekdays") || args.ContainsKey("recurrenceDays"))
             goal.RecurrenceDays = ParseWeekdayMask(args);
+        if (args.ContainsKey("isOpenEnded"))
+            goal.IsOpenEnded = ParseBool(args, "isOpenEnded", goal.IsOpenEnded);
         if (args.TryGetValue("isArchived", out var archived) && bool.TryParse(archived, out var isArchived))
             goal.IsArchived = isArchived;
+        if (goal.Category != GoalCategory.Period)
+            goal.IsOpenEnded = false;
 
         await planner.UpdateGoalAsync(goal);
-        return new AssistantToolResult(true, $"Цель обновлена: {goal.Title}");
+        return new AssistantToolResult(true, $"Цель обновлена: {goal.Title}{(goal.IsOpenEnded ? " (бессрочная)" : "")}");
     }
 
     private async Task<AssistantToolResult> DeleteGoalAsync(Dictionary<string, string> args)
@@ -323,10 +330,14 @@ public class ToolCommandRouter : IDisposable
         };
 
         using var planner = new PlannerService();
-        await planner.AddTransactionAsync(tx);
-        await planner.AddDeltaToSavingsBalanceAsync(savingsEntryId, transactionType == TransactionType.Income ? amount : -amount);
+        var account = (await planner.GetSavingsEntriesAsync()).FirstOrDefault(x => x.Id == savingsEntryId);
+        if (account == null)
+            return new AssistantToolResult(false, $"Счёт сбережений #{savingsEntryId} не найден.");
+
+        var delta = await BuildSavingsDeltaAsync(amount, currency, account.Currency, transactionType);
+        await planner.AddTransactionAsync(tx, account.Id, delta);
         FinanceDataChangedNotificationService.Publish("create_transaction", tx.Date);
-        return new AssistantToolResult(true, $"Финансовая операция создана: #{tx.Id}.");
+        return new AssistantToolResult(true, $"Финансовая операция создана: #{tx.Id}. Баланс счёта «{account.Name}» изменён на {delta:N2} {account.Currency}.");
     }
 
     private async Task<AssistantToolResult> UpdateTransactionAsync(Dictionary<string, string> args, AssistantToolExecutionContext context)
@@ -361,9 +372,14 @@ public class ToolCommandRouter : IDisposable
             return new AssistantToolResult(false, "Не указано, что изменить в операции.");
 
         using var planner = new PlannerService();
-        var ok = await planner.UpdateTransactionAsync(id, amount, categoryId, date, currency, note, updateNote);
+        var existing = await planner.GetTransactionByIdAsync(id);
+        if (existing == null)
+            return new AssistantToolResult(false, $"Финансовая операция #{id} не найдена.");
+
+        var newSavingsDelta = await ResolveUpdatedSavingsDeltaAsync(planner, existing, amount, categoryId, currency);
+        var ok = await planner.UpdateTransactionAsync(id, amount, categoryId, date, currency, note, updateNote, newSavingsDelta);
         if (ok)
-            FinanceDataChangedNotificationService.Publish("update_transaction", date ?? DateTime.Today);
+            FinanceDataChangedNotificationService.Publish("update_transaction", date ?? existing.Date);
         return ok
             ? new AssistantToolResult(true, $"Финансовая операция #{id} обновлена.")
             : new AssistantToolResult(false, $"Финансовая операция #{id} не найдена.");
@@ -384,6 +400,61 @@ public class ToolCommandRouter : IDisposable
         await planner.DeleteTransactionByIdAsync(id);
         FinanceDataChangedNotificationService.Publish("delete_transaction", transaction.Date);
         return new AssistantToolResult(true, $"Финансовая операция #{id} удалена.");
+    }
+
+    /// <summary>Приводит сумму к валюте счета и дает дельту со знаком: доход — плюс, расход — минус.</summary>
+    private static async Task<decimal> BuildSavingsDeltaAsync(
+        decimal amount,
+        string transactionCurrency,
+        string accountCurrency,
+        TransactionType type)
+    {
+        var amountInAccountCurrency = amount;
+        if (!string.Equals(transactionCurrency, accountCurrency, StringComparison.OrdinalIgnoreCase))
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            var rates = await new ExchangeRateService().GetDailyRatesAsync(cts.Token);
+            if (rates != null &&
+                ExchangeRateService.ConvertWithRates(amount, transactionCurrency, accountCurrency, rates) is { } converted)
+                amountInAccountCurrency = converted;
+        }
+
+        return type == TransactionType.Income ? amountInAccountCurrency : -amountInAccountCurrency;
+    }
+
+    /// <summary>
+    /// Новая дельта по счету после правки операции, или null, если операция не привязана
+    /// к счету либо правка не меняет сумму списания.
+    /// </summary>
+    private static async Task<decimal?> ResolveUpdatedSavingsDeltaAsync(
+        PlannerService planner,
+        Transaction existing,
+        decimal? newAmount,
+        int? newCategoryId,
+        string? newCurrency)
+    {
+        if (existing.SavingsEntryId is not { } savingsEntryId)
+            return null;
+        if (newAmount == null && newCategoryId == null && newCurrency == null)
+            return null;
+
+        var account = (await planner.GetSavingsEntriesAsync()).FirstOrDefault(x => x.Id == savingsEntryId);
+        if (account == null)
+            return null;
+
+        var effectiveType = existing.Category?.Type ?? TransactionType.Expense;
+        if (newCategoryId is { } categoryId)
+        {
+            var category = (await planner.GetFinanceCategoriesAsync()).FirstOrDefault(x => x.Id == categoryId);
+            if (category != null)
+                effectiveType = category.Type;
+        }
+
+        return await BuildSavingsDeltaAsync(
+            newAmount ?? existing.Amount,
+            newCurrency ?? existing.Currency,
+            account.Currency,
+            effectiveType);
     }
 
     private async Task<AssistantToolResult> TransferBetweenSavingsAsync(Dictionary<string, string> args, AssistantToolExecutionContext context)
@@ -601,9 +672,19 @@ public class ToolCommandRouter : IDisposable
         var recurringGoals = await planner.GetRecurringGoalsAsync(includeArchived);
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("Цели в базе");
+        var openEnded = await planner.GetOpenEndedGoalStatesAsync(periodGoals);
         sb.AppendLine($"- Периодные: {periodGoals.Count}");
         foreach (var goal in periodGoals.OrderBy(x => x.Type).ThenBy(x => x.StartDate ?? x.CreatedAt).ThenBy(x => x.Id))
         {
+            if (goal.IsOpenEnded)
+            {
+                var state = openEnded.Find(goal.Id);
+                var total = state?.TotalCount ?? 0;
+                var target = state?.Target ?? Math.Max(1, goal.TargetCount);
+                sb.AppendLine($"  - id={goal.Id}; title=\"{goal.Title}\"; openEnded=true; progress={total}/{target}; completed={total >= target}; since={(goal.StartDate ?? goal.CreatedAt):yyyy-MM-dd}; archived={goal.IsArchived}");
+                continue;
+            }
+
             var start = (goal.StartDate ?? goal.CreatedAt).Date;
             var end = goal.Type switch
             {

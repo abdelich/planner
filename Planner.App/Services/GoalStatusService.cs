@@ -11,6 +11,7 @@ public sealed class GoalStatusService : IDisposable
         var monthStart = new DateTime(year, month, 1);
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
         var goals = await _planner.GetPeriodGoalsAsync(includeArchived);
+        var openEnded = await _planner.GetOpenEndedGoalStatesAsync(goals);
         var result = new List<GoalPeriodStatus>();
 
         foreach (var goal in goals)
@@ -19,6 +20,23 @@ public sealed class GoalStatusService : IDisposable
             DateTime periodStart;
             DateTime periodEnd;
             string scope;
+
+            // Бессрочная цель попадает в месяц, пока не закрыта, и в тот месяц, где ее закрыли.
+            if (goal.IsOpenEnded)
+            {
+                if (!openEnded.IsVisibleIn(goal, monthStart, monthEnd))
+                    continue;
+
+                var state = openEnded.Find(goal.Id);
+                result.Add(new GoalPeriodStatus(
+                    goal,
+                    "openEnded",
+                    monthStart,
+                    monthEnd,
+                    state?.TotalCount ?? 0,
+                    state?.Target ?? Math.Max(1, goal.TargetCount)));
+                continue;
+            }
 
             switch (goal.Type)
             {
@@ -125,7 +143,8 @@ public sealed record GoalPeriodStatus(
         "day" => 0,
         "week" => 1,
         "month" => 2,
-        _ => 3
+        "openEnded" => 3,
+        _ => 4
     };
 
     public string ScopeText => Scope switch
@@ -133,6 +152,7 @@ public sealed record GoalPeriodStatus(
         "day" => "день",
         "week" => "неделя",
         "month" => "месяц",
+        "openEnded" => "бессрочная",
         _ => Scope
     };
 }

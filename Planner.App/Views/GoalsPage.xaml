@@ -336,18 +336,22 @@
                         <TextBox Text="{Binding NewGoalDescription, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" Margin="0,0,0,12" Height="50" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" CaretBrush="{StaticResource TextPrimaryBrush}" BorderBrush="{StaticResource PrimaryBrush}" BorderThickness="1"/>
 
                         <StackPanel Visibility="{Binding NewGoalCategory, Converter={StaticResource GoalCategoryToVisibilityConverter}}">
-                            <TextBlock Text="Период" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
-                            <TextBlock Text="{Binding PeriodTypeLabel}" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" Margin="0,0,0,12" Visibility="{Binding ShowPeriodTypeAsLabel, Converter={StaticResource BoolToVis}}"/>
-                            <StackPanel Visibility="{Binding ShowPeriodTypeComboBox, Converter={StaticResource BoolToVis}}">
-                                <ComboBox ItemsSource="{Binding Source={StaticResource GoalTypes}}" SelectedItem="{Binding NewGoalType}" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Converter={StaticResource GoalTypeToRu}}" Foreground="{StaticResource TextPrimaryBrush}"/>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
+                            <CheckBox Content="Бессрочная цель" IsChecked="{Binding NewGoalIsOpenEnded}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,0,4"/>
+                            <TextBlock Text="Висит в списках дня, недели и месяца, пока её не выполнят или не удалят." Foreground="{StaticResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                            <StackPanel Visibility="{Binding ShowPeriodTypeSection, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="Период" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                                <TextBlock Text="{Binding PeriodTypeLabel}" Foreground="{StaticResource TextPrimaryBrush}" FontWeight="SemiBold" Margin="0,0,0,12" Visibility="{Binding ShowPeriodTypeAsLabel, Converter={StaticResource BoolToVis}}"/>
+                                <StackPanel Visibility="{Binding ShowPeriodTypeComboBox, Converter={StaticResource BoolToVis}}">
+                                    <ComboBox ItemsSource="{Binding Source={StaticResource GoalTypes}}" SelectedItem="{Binding NewGoalType}" Margin="0,0,0,12" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" BorderBrush="#e0e0e0">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Converter={StaticResource GoalTypeToRu}}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
                             </StackPanel>
-                            <TextBlock Text="Цель в периоде (раз)" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
+                            <TextBlock Text="{Binding TargetCountLabel}" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4"/>
                             <TextBox Text="{Binding NewGoalTargetCount, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" Margin="0,0,0,16" Background="{StaticResource BackgroundCardBrush}" Foreground="{StaticResource TextPrimaryBrush}" CaretBrush="{StaticResource TextPrimaryBrush}"/>
                         </StackPanel>
 

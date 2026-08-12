@@ -236,12 +236,13 @@ public static class AssistantToolCatalog
 
     private static IEnumerable<AssistantToolSpec> BuildSpecs()
     {
-        yield return Spec("create_goal", "Create a day/week/month or recurring goal",
+        yield return Spec("create_goal", "Create a day/week/month, open-ended, or recurring goal. isOpenEnded=true makes a period goal stay in the day, week and month lists every period until it is completed or deleted (type is then ignored)",
             Args(
                 Req("title", "string"),
                 Opt("description", "string"),
                 Opt("category", "enum", "period", "recurring"),
                 Opt("type", "enum", "daily", "weekly", "monthly", "day", "week", "month"),
+                Opt("isOpenEnded", "bool"),
                 Opt("targetCount", "int"),
                 Opt("startDate", "date"),
                 Opt("recurrenceKind", "enum", "everyday", "daily", "everyndays", "every_n_days", "interval", "specificdaysofweek", "weekdays", "days_of_week"),
@@ -251,7 +252,7 @@ public static class AssistantToolCatalog
             Required("title"));
 
         yield return Spec("update_goal", "Update an existing goal",
-            Args(IdArgs("goalId"), Opt("title", "string"), Opt("description", "string"), Opt("targetCount", "int"), Opt("type", "enum", "daily", "weekly", "monthly", "day", "week", "month"), Opt("category", "enum", "period", "recurring"), Opt("startDate", "date"), Opt("recurrenceKind", "enum", "everyday", "daily", "everyndays", "every_n_days", "interval", "specificdaysofweek", "weekdays", "days_of_week"), Opt("intervalDays", "int"), Opt("weekdays", "string"), Opt("recurrenceDays", "int"), Opt("isArchived", "bool")),
+            Args(IdArgs("goalId"), Opt("title", "string"), Opt("description", "string"), Opt("targetCount", "int"), Opt("type", "enum", "daily", "weekly", "monthly", "day", "week", "month"), Opt("category", "enum", "period", "recurring"), Opt("isOpenEnded", "bool"), Opt("startDate", "date"), Opt("recurrenceKind", "enum", "everyday", "daily", "everyndays", "every_n_days", "interval", "specificdaysofweek", "weekdays", "days_of_week"), Opt("intervalDays", "int"), Opt("weekdays", "string"), Opt("recurrenceDays", "int"), Opt("isArchived", "bool")),
             RequiredAny("goalId", "id"));
 
         yield return Spec("delete_goal", "Delete a goal and its completions", Args(IdArgs("goalId")), RequiredAny("goalId", "id"));

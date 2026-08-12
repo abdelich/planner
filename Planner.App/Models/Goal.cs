@@ -8,6 +8,13 @@ public class Goal
 
     public GoalCategory Category { get; set; } = GoalCategory.Period;
     public GoalType Type { get; set; }
+
+    /// <summary>
+    /// Бессрочная цель: висит в списках дня, недели и месяца в каждом периоде,
+    /// пока ее не выполнят или не удалят. Для нее <see cref="Type"/> не учитывается.
+    /// </summary>
+    public bool IsOpenEnded { get; set; }
+
     public RecurrenceKind RecurrenceKind { get; set; } = RecurrenceKind.EveryDay;
     public int IntervalDays { get; set; } = 1;
     public int RecurrenceDays { get; set; }

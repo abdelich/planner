@@ -387,7 +387,6 @@ public partial class FinanceViewModel : ObservableObject
         };
         try
         {
-            await _service.AddTransactionAsync(t);
             var account = selectedAccount.Entry;
             var rates = await _rates.GetDailyRatesAsync();
             decimal amountInAccountCurrency;
@@ -398,7 +397,7 @@ public partial class FinanceViewModel : ObservableObject
             else
                 amountInAccountCurrency = amount;
             var delta = NewTransactionType == TransactionType.Income ? amountInAccountCurrency : -amountInAccountCurrency;
-            await _service.AddDeltaToSavingsBalanceAsync(account.Id, delta);
+            await _service.AddTransactionAsync(t, account.Id, delta);
             IsAddTransactionOpen = false;
             await LoadAsync();
         }
@@ -504,6 +503,8 @@ public partial class FinanceViewModel : ObservableObject
         if (toRemove != null)
             Transactions.Remove(toRemove);
         await LoadMonthStatsAsync();
+        await LoadSavingsAsync();
+        await OnSavingsChangedAsync();
     }
 
     private async Task LoadRatesIfNeededAsync()

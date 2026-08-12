@@ -61,7 +61,7 @@ In **Settings → Launch with Windows**. It registers the app in the Windows sta
 
 ## Settings (sidebar → Настройки)
 
-- **OpenAI API key** — stored encrypted via Windows DPAPI in `%LocalAppData%\Planner`. You can also set it via the `OPENAI_API_KEY` environment variable (the env var takes priority).
+- **OpenAI API key** — stored encrypted via Windows DPAPI in `%LocalAppData%\Planner`. You can also set it via the `OPENAI_API_KEY` environment variable, which is used only when no key is saved in settings (the saved key wins). Clearing the field in the UI does not erase the saved key — use "Очистить сохраненный ключ".
 - **Model / Endpoint** — defaults: `gpt-4o-mini` and the OpenAI Chat Completions endpoint. You can point at an OpenAI-compatible endpoint.
 - **Data scopes** — opt in / out of feeding finance / goals / reminders into the assistant context.
 - **Voice hotkey** — capture a global hotkey for one-shot voice input.
@@ -89,7 +89,7 @@ Assistant settings (encrypted API key, voice hotkey, etc.):
 
 Diagnostics log:
 
-`%LocalAppData%\Planner\assistant.diagnostics.log`
+`%LocalAppData%\Planner\diagnostics.log`
 
 ## Stack
 
